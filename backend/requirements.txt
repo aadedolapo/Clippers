@@ -1,0 +1,9 @@
+yt-dlp
+faster-whisper
+fastapi
+uvicorn[standard]
+python-multipart
+anthropic
+librosa
+soundfile
+python-dotenv
