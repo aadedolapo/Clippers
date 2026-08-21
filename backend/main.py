@@ -3,11 +3,15 @@ FastAPI wrapper around the pipeline (PRD section 8): /analyze, /send-to-resolve,
 /status/{job_id}. In-memory job state only — no database, single user, localhost.
 """
 
+import logging
 import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal, Optional
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("viral_clipper")
 
 from dotenv import load_dotenv
 
@@ -69,6 +73,7 @@ def _run_analysis(job_id: str, url: Optional[str], local_file: Optional[str] = N
 
         _set_job(job_id, status="done", clips=clips)
     except Exception as e:
+        logger.exception(f"analyze job {job_id} failed")
         _set_job(job_id, status="error", error=str(e))
 
 
@@ -158,6 +163,7 @@ def send_to_resolve(req: SendToResolveRequest):
                 )
             results.append({"start": clip.start, "end": clip.end, "success": True, "captioned_mp4": caption_path})
         except Exception as e:
+            logger.exception(f"send-to-resolve failed for clip [{clip.start:.1f}-{clip.end:.1f}]")
             results.append({"start": clip.start, "end": clip.end, "success": False, "error": str(e)})
 
     return {"results": results}

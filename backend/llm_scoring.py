@@ -63,11 +63,17 @@ def build_windows(segments: list[dict], min_len: float = 20.0, max_len: float = 
 def score_window(client: Anthropic, window: dict) -> dict:
     message = client.messages.create(
         model=MODEL,
-        max_tokens=300,
+        max_tokens=1024,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": f"Transcript excerpt:\n\n{window['text']}"}],
     )
-    raw = message.content[0].text.strip()
+    # content[0] isn't reliably the text block — the model can emit a
+    # ThinkingBlock (or other non-text block) first, which has no .text
+    # attribute. Find the actual text block regardless of position.
+    text_block = next((block for block in message.content if block.type == "text"), None)
+    if text_block is None:
+        raise RuntimeError(f"No text block in Claude response (got: {[b.type for b in message.content]})")
+    raw = text_block.text.strip()
     # Models sometimes wrap JSON in fences despite instructions; strip if present.
     if raw.startswith("```"):
         raw = raw.strip("`")

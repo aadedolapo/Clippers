@@ -85,8 +85,13 @@ def _import_media(media_pool, filepath: str):
     if filepath in _media_pool_item_cache:
         return _media_pool_item_cache[filepath]
 
+    # ImportMedia can return a non-empty list containing None for a failed
+    # import (confirmed on AppendToTimeline in earlier testing) rather than
+    # an empty list — `if not items` alone misses that case and a bare None
+    # would get cached and reused forever, silently poisoning every later
+    # call for this filepath.
     items = media_pool.ImportMedia([filepath])
-    if not items:
+    if not items or items[0] is None:
         raise RuntimeError(f"DaVinci Resolve failed to import {filepath}")
 
     item = items[0]
@@ -204,7 +209,12 @@ def send_clip_to_resolve(filepath: str, title: str, start: float, end: float) ->
         "endFrame": end_frame,
     }
     result = media_pool.AppendToTimeline([clip_info])
-    if not result:
+    # AppendToTimeline can return a non-empty list containing None for a
+    # failed append rather than an empty list — `if not result` alone misses
+    # that case, leaving result[0] as None and causing an opaque
+    # "'NoneType' object is not callable" a few lines later when it's used
+    # as if it were a real timeline item.
+    if not result or result[0] is None:
         raise RuntimeError(f"Resolve failed to append clip [{start:.1f}-{end:.1f}] to timeline")
 
     zoom = _apply_fill_zoom(result[0], media_pool_item, timeline)
