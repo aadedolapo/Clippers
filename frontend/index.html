@@ -73,13 +73,34 @@
   button:disabled { opacity: 0.5; cursor: default; }
   button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
 
-  #status-line {
-    margin-top: 12px;
+  #sessions { margin-top: 24px; display: flex; flex-direction: column; gap: 24px; }
+  .session {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+  .session-header {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    cursor: pointer;
+    user-select: none;
+  }
+  .session-name { font-size: 16px; margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .session-status {
     font-size: 13px;
     color: var(--muted);
-    min-height: 18px;
   }
-  #error-box {
+  .session-toggle {
+    font-size: 11px;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+    flex-shrink: 0;
+  }
+  .session.collapsed .session-toggle { transform: rotate(-90deg); }
+  .session.collapsed .session-body { display: none; }
+  .session-error {
     margin-top: 12px;
     padding: 12px 14px;
     border-radius: 8px;
@@ -90,7 +111,7 @@
     display: none;
   }
 
-  #clips { margin-top: 24px; display: flex; flex-direction: column; gap: 12px; }
+  .session-clips { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
   .clip {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -117,7 +138,7 @@
     font-variant-numeric: tabular-nums;
   }
   .clip-reason { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
-  .clip-hook {
+  .clip-field {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -125,11 +146,11 @@
     border: 1px solid rgba(110, 168, 254, 0.3);
     border-radius: 6px;
     padding: 6px 10px;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
-  .clip-hook-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent); flex-shrink: 0; }
-  .clip-hook-text { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; user-select: all; }
-  .clip-hook-copy {
+  .clip-field-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent); flex-shrink: 0; min-width: 34px; }
+  .clip-field-text { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; user-select: all; }
+  .clip-field-copy {
     padding: 4px 10px;
     font-size: 12px;
     font-weight: 600;
@@ -140,7 +161,8 @@
     cursor: pointer;
     flex-shrink: 0;
   }
-  .clip-hook-copy.copied { color: var(--good); border-color: var(--good); }
+  .clip-field-copy.copied { color: var(--good); border-color: var(--good); }
+  .clip-fields { margin-bottom: 8px; }
   .clip-text {
     font-size: 13px;
     color: var(--text);
@@ -152,13 +174,13 @@
   .clip-result.ok { color: var(--good); }
   .clip-result.fail { color: var(--bad); }
 
-  #send-bar {
-    margin-top: 20px;
+  .session-send-bar {
+    margin-top: 16px;
     display: none;
     align-items: center;
     gap: 12px;
   }
-  #send-bar span { color: var(--muted); font-size: 13px; }
+  .session-send-bar span { color: var(--muted); font-size: 13px; }
 
   .hidden { display: none !important; }
 </style>
@@ -166,29 +188,22 @@
 <body>
 <header>
   <h1>Viral Clip Finder</h1>
-  <p>Paste a YouTube URL, get ranked clip candidates, send picks to DaVinci Resolve.</p>
+  <p>Upload one or more videos, get ranked clip candidates for each, send picks to DaVinci Resolve.</p>
 </header>
 
 <main>
   <div class="row">
     <input type="url" id="url-input" placeholder="https://www.youtube.com/watch?v=..." />
-    <input type="file" id="local-file-input" class="hidden" accept="video/*" />
-    <input type="text" id="local-title-input" class="hidden" placeholder="Title (optional)" style="flex: 0 0 220px;" />
+    <input type="file" id="local-file-input" class="hidden" accept="video/*" multiple />
+    <input type="text" id="local-title-input" class="hidden" placeholder="Title (optional, single file only)" style="flex: 0 0 220px;" />
     <button id="analyze-btn">Analyze</button>
   </div>
   <label style="display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13px; color: var(--muted); cursor: pointer;">
     <input type="checkbox" id="local-file-toggle" />
-    Upload a local file instead of a YouTube URL (e.g. downloaded via a third-party tool for higher quality)
+    Upload local file(s) instead of a YouTube URL (e.g. downloaded via a third-party tool for higher quality) — select multiple to queue them all at once
   </label>
-  <div id="status-line"></div>
-  <div id="error-box"></div>
 
-  <div id="clips"></div>
-
-  <div id="send-bar">
-    <button id="send-btn">Send to Resolve</button>
-    <span id="send-count"></span>
-  </div>
+  <div id="sessions"></div>
 </main>
 
 <script>
@@ -197,16 +212,7 @@ const urlInput = document.getElementById("url-input");
 const localFileInput = document.getElementById("local-file-input");
 const localTitleInput = document.getElementById("local-title-input");
 const localFileToggle = document.getElementById("local-file-toggle");
-const statusLine = document.getElementById("status-line");
-const errorBox = document.getElementById("error-box");
-const clipsEl = document.getElementById("clips");
-const sendBar = document.getElementById("send-bar");
-const sendBtn = document.getElementById("send-btn");
-const sendCount = document.getElementById("send-count");
-
-let currentVideoId = null;
-let currentClips = [];
-let pollHandle = null;
+const sessionsEl = document.getElementById("sessions");
 
 function fmtTime(sec) {
   const m = Math.floor(sec / 60);
@@ -214,21 +220,10 @@ function fmtTime(sec) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function setError(msg) {
-  if (!msg) {
-    errorBox.style.display = "none";
-    errorBox.textContent = "";
-    return;
-  }
-  errorBox.style.display = "block";
-  errorBox.textContent = msg;
-}
-
-function setBusy(busy) {
-  analyzeBtn.disabled = busy;
-  urlInput.disabled = busy;
-  localFileInput.disabled = busy;
-  localTitleInput.disabled = busy;
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
 }
 
 localFileToggle.addEventListener("change", () => {
@@ -238,192 +233,254 @@ localFileToggle.addEventListener("change", () => {
   localTitleInput.classList.toggle("hidden", !useLocal);
 });
 
-async function analyze() {
-  const useLocal = localFileToggle.checked;
-  const url = urlInput.value.trim();
-  const file = localFileInput.files[0];
-  if (useLocal ? !file : !url) return;
-
-  setError(null);
-  clipsEl.innerHTML = "";
-  sendBar.style.display = "none";
-  setBusy(true);
-  statusLine.textContent = useLocal ? "Uploading..." : "Starting...";
-
-  try {
-    let body;
-    if (useLocal) {
-      const form = new FormData();
-      form.append("file", file);
-      const uploadRes = await fetch("/upload", { method: "POST", body: form });
-      if (!uploadRes.ok) throw new Error(`upload failed (${uploadRes.status})`);
-      const { local_file, title } = await uploadRes.json();
-      body = { local_file, title: localTitleInput.value.trim() || title };
-      statusLine.textContent = "Starting...";
-    } else {
-      body = { url };
-    }
-
-    const res = await fetch("/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`analyze request failed (${res.status})`);
-    const { job_id } = await res.json();
-    poll(job_id);
-  } catch (e) {
-    setBusy(false);
-    setError(e.message);
-    statusLine.textContent = "";
-  }
-}
-
-function poll(jobId) {
-  if (pollHandle) clearInterval(pollHandle);
-  pollHandle = setInterval(async () => {
-    try {
-      const res = await fetch(`/status/${jobId}`);
-      if (!res.ok) throw new Error(`status request failed (${res.status})`);
-      const data = await res.json();
-
-      if (data.status === "error") {
-        clearInterval(pollHandle);
-        setBusy(false);
-        statusLine.textContent = "";
-        setError(data.error || "Analysis failed.");
-        return;
-      }
-
-      if (data.status === "done") {
-        clearInterval(pollHandle);
-        setBusy(false);
-        statusLine.textContent = `Done — ${data.title}`;
-        currentVideoId = data.video_id;
-        currentClips = data.clips;
-        renderClips(data.clips);
-        return;
-      }
-
-      statusLine.textContent = `Status: ${data.status}...`;
-    } catch (e) {
-      clearInterval(pollHandle);
-      setBusy(false);
-      setError(e.message);
-    }
-  }, 2000);
-}
-
-function renderClips(clips) {
-  clipsEl.innerHTML = "";
-  if (clips.length === 0) {
-    clipsEl.innerHTML = `<div style="color: var(--muted); font-size: 14px;">No candidate clips found.</div>`;
-    return;
-  }
-
-  clips.forEach((clip, i) => {
-    const duration = clip.end - clip.start;
-    const el = document.createElement("div");
-    el.className = "clip";
-    el.dataset.index = i;
-    el.innerHTML = `
-      <input type="checkbox" class="clip-checkbox" />
-      <div class="clip-body">
-        <div class="clip-meta">
-          <span class="clip-time">${fmtTime(clip.start)} – ${fmtTime(clip.end)}</span>
-          <span class="clip-duration">${duration.toFixed(1)}s</span>
-          <span class="clip-score">${(clip.score * 10).toFixed(1)}/10</span>
-        </div>
-        <div class="clip-reason">${escapeHtml(clip.reason)}</div>
-        ${clip.hook ? `
-        <div class="clip-hook">
-          <span class="clip-hook-label">Hook</span>
-          <span class="clip-hook-text">${escapeHtml(clip.hook)}</span>
-          <button type="button" class="clip-hook-copy">Copy</button>
-        </div>` : ""}
-        <div class="clip-text">${escapeHtml(clip.text)}</div>
-        <div class="clip-result"></div>
+// Each call to startSession owns one video end-to-end (upload/analyze, poll,
+// render its own clip list, send its own selections to Resolve) via closures
+// scoped to that session's DOM block — independent of every other session,
+// so multiple videos can be queued and worked on at once.
+function startSession(source) {
+  const root = document.createElement("div");
+  root.className = "session";
+  root.innerHTML = `
+    <div class="session-header">
+      <span class="session-toggle">▾</span>
+      <h2 class="session-name">${escapeHtml(source.type === "file" ? source.file.name : source.url)}</h2>
+      <span class="session-status">Starting…</span>
+    </div>
+    <div class="session-body">
+      <div class="session-error"></div>
+      <div class="session-clips"></div>
+      <div class="session-send-bar">
+        <button type="button" class="session-send-btn">Send to Resolve</button>
+        <span class="session-send-count"></span>
       </div>
-    `;
-    const copyBtn = el.querySelector(".clip-hook-copy");
-    if (copyBtn) {
-      copyBtn.addEventListener("click", () => {
-        navigator.clipboard.writeText(clip.hook).then(() => {
-          copyBtn.textContent = "Copied";
-          copyBtn.classList.add("copied");
-          setTimeout(() => {
-            copyBtn.textContent = "Copy";
-            copyBtn.classList.remove("copied");
-          }, 1500);
+    </div>
+  `;
+  sessionsEl.prepend(root);
+
+  root.querySelector(".session-header").addEventListener("click", () => {
+    root.classList.toggle("collapsed");
+  });
+
+  const nameEl = root.querySelector(".session-name");
+  const statusEl = root.querySelector(".session-status");
+  const errorEl = root.querySelector(".session-error");
+  const clipsEl = root.querySelector(".session-clips");
+  const sendBar = root.querySelector(".session-send-bar");
+  const sendBtn = root.querySelector(".session-send-btn");
+  const sendCount = root.querySelector(".session-send-count");
+
+  let videoId = null;
+  let clips = [];
+
+  function setError(msg) {
+    if (!msg) {
+      errorEl.style.display = "none";
+      errorEl.textContent = "";
+      return;
+    }
+    errorEl.style.display = "block";
+    errorEl.textContent = msg;
+  }
+
+  function selectedCheckboxes() {
+    return Array.from(clipsEl.querySelectorAll(".clip-checkbox")).filter((c) => c.checked);
+  }
+
+  function updateSendBar() {
+    const n = selectedCheckboxes().length;
+    sendBar.style.display = n > 0 ? "flex" : "none";
+    sendCount.textContent = n === 1 ? "1 clip selected" : `${n} clips selected`;
+  }
+
+  function renderClips() {
+    clipsEl.innerHTML = "";
+    if (clips.length === 0) {
+      clipsEl.innerHTML = `<div style="color: var(--muted); font-size: 14px;">No candidate clips found.</div>`;
+      return;
+    }
+
+    const copyFields = [
+      { key: "hook", label: "Hook" },
+      { key: "seo_title", label: "Title" },
+      { key: "seo_description", label: "Desc" },
+    ];
+
+    clips.forEach((clip, i) => {
+      const duration = clip.end - clip.start;
+      const el = document.createElement("div");
+      el.className = "clip";
+      el.dataset.index = i;
+      const fieldsHtml = copyFields
+        .filter((f) => clip[f.key])
+        .map(
+          (f) => `
+          <div class="clip-field" data-field="${f.key}">
+            <span class="clip-field-label">${f.label}</span>
+            <span class="clip-field-text">${escapeHtml(clip[f.key])}</span>
+            <button type="button" class="clip-field-copy">Copy</button>
+          </div>`
+        )
+        .join("");
+      el.innerHTML = `
+        <input type="checkbox" class="clip-checkbox" />
+        <div class="clip-body">
+          <div class="clip-meta">
+            <span class="clip-time">${fmtTime(clip.start)} – ${fmtTime(clip.end)}</span>
+            <span class="clip-duration">${duration.toFixed(1)}s</span>
+            <span class="clip-score">${(clip.score * 10).toFixed(1)}/10</span>
+          </div>
+          <div class="clip-reason">${escapeHtml(clip.reason)}</div>
+          <div class="clip-fields">${fieldsHtml}</div>
+          <div class="clip-text">${escapeHtml(clip.text)}</div>
+          <div class="clip-result"></div>
+        </div>
+      `;
+      el.querySelectorAll(".clip-field").forEach((fieldEl) => {
+        const value = clip[fieldEl.dataset.field];
+        const copyBtn = fieldEl.querySelector(".clip-field-copy");
+        copyBtn.addEventListener("click", () => {
+          navigator.clipboard.writeText(value).then(() => {
+            copyBtn.textContent = "Copied";
+            copyBtn.classList.add("copied");
+            setTimeout(() => {
+              copyBtn.textContent = "Copy";
+              copyBtn.classList.remove("copied");
+            }, 1500);
+          });
         });
       });
-    }
-    el.querySelector(".clip-checkbox").addEventListener("change", updateSendBar);
-    clipsEl.appendChild(el);
-  });
-
-  updateSendBar();
-}
-
-function escapeHtml(s) {
-  const div = document.createElement("div");
-  div.textContent = s;
-  return div.innerHTML;
-}
-
-function selectedCheckboxes() {
-  return Array.from(document.querySelectorAll(".clip-checkbox")).filter((c) => c.checked);
-}
-
-function updateSendBar() {
-  const n = selectedCheckboxes().length;
-  sendBar.style.display = n > 0 ? "flex" : "none";
-  sendCount.textContent = n === 1 ? "1 clip selected" : `${n} clips selected`;
-}
-
-async function sendToResolve() {
-  const selected = selectedCheckboxes();
-  if (selected.length === 0) return;
-
-  sendBtn.disabled = true;
-  sendBtn.textContent = "Sending...";
-
-  const clips = selected.map((cb) => {
-    const idx = Number(cb.closest(".clip").dataset.index);
-    return { start: currentClips[idx].start, end: currentClips[idx].end };
-  });
-
-  try {
-    const res = await fetch("/send-to-resolve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ video_id: currentVideoId, clips }),
+      el.querySelector(".clip-checkbox").addEventListener("change", updateSendBar);
+      clipsEl.appendChild(el);
     });
-    if (!res.ok) throw new Error(`send-to-resolve failed (${res.status})`);
-    const { results } = await res.json();
 
-    selected.forEach((cb, i) => {
-      const resultEl = cb.closest(".clip").querySelector(".clip-result");
-      const r = results[i];
-      if (r.success) {
-        resultEl.className = "clip-result ok";
-        resultEl.textContent = `Sent to Resolve${r.captioned_mp4 ? ` — captioned mp4: ${r.captioned_mp4}` : ""}`;
-      } else {
-        resultEl.className = "clip-result fail";
-        resultEl.textContent = `Failed: ${r.error}`;
+    updateSendBar();
+  }
+
+  function poll(jobId) {
+    const handle = setInterval(async () => {
+      try {
+        const res = await fetch(`/status/${jobId}`);
+        if (!res.ok) throw new Error(`status request failed (${res.status})`);
+        const data = await res.json();
+
+        if (data.status === "error") {
+          clearInterval(handle);
+          statusEl.textContent = "Error";
+          setError(data.error || "Analysis failed.");
+          return;
+        }
+
+        if (data.status === "done") {
+          clearInterval(handle);
+          statusEl.textContent = "Done";
+          nameEl.textContent = data.title;
+          videoId = data.video_id;
+          clips = data.clips;
+          renderClips();
+          return;
+        }
+
+        statusEl.textContent = data.status + "…";
+      } catch (e) {
+        clearInterval(handle);
+        statusEl.textContent = "Error";
+        setError(e.message);
       }
+    }, 2000);
+  }
+
+  sendBtn.addEventListener("click", async () => {
+    const selected = selectedCheckboxes();
+    if (selected.length === 0) return;
+
+    sendBtn.disabled = true;
+    sendBtn.textContent = "Sending...";
+
+    const selectedClips = selected.map((cb) => {
+      const idx = Number(cb.closest(".clip").dataset.index);
+      return { start: clips[idx].start, end: clips[idx].end };
     });
-  } catch (e) {
-    setError(e.message);
-  } finally {
-    sendBtn.disabled = false;
-    sendBtn.textContent = "Send to Resolve";
+
+    try {
+      const res = await fetch("/send-to-resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ video_id: videoId, clips: selectedClips }),
+      });
+      if (!res.ok) throw new Error(`send-to-resolve failed (${res.status})`);
+      const { results } = await res.json();
+
+      selected.forEach((cb, i) => {
+        const resultEl = cb.closest(".clip").querySelector(".clip-result");
+        const r = results[i];
+        if (r.success) {
+          resultEl.className = "clip-result ok";
+          resultEl.textContent = `Sent to Resolve${r.captioned_mp4 ? ` — captioned mp4: ${r.captioned_mp4}` : ""}`;
+        } else {
+          resultEl.className = "clip-result fail";
+          resultEl.textContent = `Failed: ${r.error}`;
+        }
+      });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      sendBtn.disabled = false;
+      sendBtn.textContent = "Send to Resolve";
+    }
+  });
+
+  (async () => {
+    try {
+      let body;
+      if (source.type === "file") {
+        statusEl.textContent = "Uploading…";
+        const form = new FormData();
+        form.append("file", source.file);
+        const uploadRes = await fetch("/upload", { method: "POST", body: form });
+        if (!uploadRes.ok) throw new Error(`upload failed (${uploadRes.status})`);
+        const { local_file, title } = await uploadRes.json();
+        body = { local_file, title: source.title || title };
+        nameEl.textContent = body.title;
+      } else {
+        body = { url: source.url };
+      }
+
+      statusEl.textContent = "Starting…";
+      const res = await fetch("/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`analyze request failed (${res.status})`);
+      const { job_id } = await res.json();
+      poll(job_id);
+    } catch (e) {
+      statusEl.textContent = "Error";
+      setError(e.message);
+    }
+  })();
+}
+
+function analyze() {
+  const useLocal = localFileToggle.checked;
+
+  if (useLocal) {
+    const files = Array.from(localFileInput.files);
+    if (files.length === 0) return;
+    const singleTitle = files.length === 1 ? localTitleInput.value.trim() : "";
+    files.forEach((file) => startSession({ type: "file", file, title: singleTitle }));
+    localFileInput.value = "";
+    localTitleInput.value = "";
+  } else {
+    const url = urlInput.value.trim();
+    if (!url) return;
+    startSession({ type: "url", url });
+    urlInput.value = "";
   }
 }
 
 analyzeBtn.addEventListener("click", analyze);
 urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") analyze(); });
-sendBtn.addEventListener("click", sendToResolve);
 </script>
 </body>
 </html>

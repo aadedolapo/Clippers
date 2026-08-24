@@ -127,6 +127,8 @@ def status(job_id: str):
                 "text": c["text"],
                 "emphasis_words": c["emphasis_words"],
                 "hook": c["hook"],
+                "seo_title": c["seo_title"],
+                "seo_description": c["seo_description"],
             }
             for c in job["clips"]
         ]
