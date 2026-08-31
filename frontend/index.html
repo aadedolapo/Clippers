@@ -31,7 +31,7 @@
   main { max-width: 900px; margin: 0 auto; padding: 24px 32px 80px; }
 
   .row { display: flex; gap: 8px; align-items: center; }
-  input[type=url], input[type=text] {
+  input[type=text] {
     flex: 1;
     padding: 12px 14px;
     background: var(--panel);
@@ -163,6 +163,17 @@
   }
   .clip-field-copy.copied { color: var(--good); border-color: var(--good); }
   .clip-fields { margin-bottom: 8px; }
+  .clip-download-btn {
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+    margin-bottom: 8px;
+  }
   .clip-text {
     font-size: 13px;
     color: var(--text);
@@ -181,8 +192,6 @@
     gap: 12px;
   }
   .session-send-bar span { color: var(--muted); font-size: 13px; }
-
-  .hidden { display: none !important; }
 </style>
 </head>
 <body>
@@ -193,25 +202,19 @@
 
 <main>
   <div class="row">
-    <input type="url" id="url-input" placeholder="https://www.youtube.com/watch?v=..." />
-    <input type="file" id="local-file-input" class="hidden" accept="video/*" multiple />
-    <input type="text" id="local-title-input" class="hidden" placeholder="Title (optional, single file only)" style="flex: 0 0 220px;" />
+    <input type="file" id="local-file-input" accept="video/*" multiple />
+    <input type="text" id="local-title-input" placeholder="Title (optional, single file only)" style="flex: 0 0 220px;" />
     <button id="analyze-btn">Analyze</button>
   </div>
-  <label style="display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13px; color: var(--muted); cursor: pointer;">
-    <input type="checkbox" id="local-file-toggle" />
-    Upload local file(s) instead of a YouTube URL (e.g. downloaded via a third-party tool for higher quality) — select multiple to queue them all at once
-  </label>
+  <p style="margin-top: 10px; font-size: 13px; color: var(--muted);">Select one or more video files to queue them all at once.</p>
 
   <div id="sessions"></div>
 </main>
 
 <script>
 const analyzeBtn = document.getElementById("analyze-btn");
-const urlInput = document.getElementById("url-input");
 const localFileInput = document.getElementById("local-file-input");
 const localTitleInput = document.getElementById("local-title-input");
-const localFileToggle = document.getElementById("local-file-toggle");
 const sessionsEl = document.getElementById("sessions");
 
 function fmtTime(sec) {
@@ -226,24 +229,35 @@ function escapeHtml(s) {
   return div.innerHTML;
 }
 
-localFileToggle.addEventListener("change", () => {
-  const useLocal = localFileToggle.checked;
-  urlInput.classList.toggle("hidden", useLocal);
-  localFileInput.classList.toggle("hidden", !useLocal);
-  localTitleInput.classList.toggle("hidden", !useLocal);
-});
+function downloadClipText(clip, index) {
+  const lines = [];
+  if (clip.seo_title) lines.push(`Title: ${clip.seo_title}`);
+  if (clip.hook) lines.push(`Hook: ${clip.hook}`);
+  if (clip.seo_description) lines.push(`Description: ${clip.seo_description}`);
+  if (lines.length === 0) return;
+
+  const blob = new Blob([lines.join("\n\n") + "\n"], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `clip_${index + 1}_${fmtTime(clip.start).replace(":", "m")}s.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 // Each call to startSession owns one video end-to-end (upload/analyze, poll,
 // render its own clip list, send its own selections to Resolve) via closures
 // scoped to that session's DOM block — independent of every other session,
 // so multiple videos can be queued and worked on at once.
-function startSession(source) {
+function startSession(file, titleOverride) {
   const root = document.createElement("div");
   root.className = "session";
   root.innerHTML = `
     <div class="session-header">
       <span class="session-toggle">▾</span>
-      <h2 class="session-name">${escapeHtml(source.type === "file" ? source.file.name : source.url)}</h2>
+      <h2 class="session-name">${escapeHtml(file.name)}</h2>
       <span class="session-status">Starting…</span>
     </div>
     <div class="session-body">
@@ -331,10 +345,15 @@ function startSession(source) {
           </div>
           <div class="clip-reason">${escapeHtml(clip.reason)}</div>
           <div class="clip-fields">${fieldsHtml}</div>
+          ${fieldsHtml ? '<button type="button" class="clip-download-btn">Download title/hook/desc</button>' : ""}
           <div class="clip-text">${escapeHtml(clip.text)}</div>
           <div class="clip-result"></div>
         </div>
       `;
+      const downloadBtn = el.querySelector(".clip-download-btn");
+      if (downloadBtn) {
+        downloadBtn.addEventListener("click", () => downloadClipText(clip, i));
+      }
       el.querySelectorAll(".clip-field").forEach((fieldEl) => {
         const value = clip[fieldEl.dataset.field];
         const copyBtn = fieldEl.querySelector(".clip-field-copy");
@@ -431,19 +450,14 @@ function startSession(source) {
 
   (async () => {
     try {
-      let body;
-      if (source.type === "file") {
-        statusEl.textContent = "Uploading…";
-        const form = new FormData();
-        form.append("file", source.file);
-        const uploadRes = await fetch("/upload", { method: "POST", body: form });
-        if (!uploadRes.ok) throw new Error(`upload failed (${uploadRes.status})`);
-        const { local_file, title } = await uploadRes.json();
-        body = { local_file, title: source.title || title };
-        nameEl.textContent = body.title;
-      } else {
-        body = { url: source.url };
-      }
+      statusEl.textContent = "Uploading…";
+      const form = new FormData();
+      form.append("file", file);
+      const uploadRes = await fetch("/upload", { method: "POST", body: form });
+      if (!uploadRes.ok) throw new Error(`upload failed (${uploadRes.status})`);
+      const { local_file, title } = await uploadRes.json();
+      const body = { local_file, title: titleOverride || title };
+      nameEl.textContent = body.title;
 
       statusEl.textContent = "Starting…";
       const res = await fetch("/analyze", {
@@ -462,25 +476,15 @@ function startSession(source) {
 }
 
 function analyze() {
-  const useLocal = localFileToggle.checked;
-
-  if (useLocal) {
-    const files = Array.from(localFileInput.files);
-    if (files.length === 0) return;
-    const singleTitle = files.length === 1 ? localTitleInput.value.trim() : "";
-    files.forEach((file) => startSession({ type: "file", file, title: singleTitle }));
-    localFileInput.value = "";
-    localTitleInput.value = "";
-  } else {
-    const url = urlInput.value.trim();
-    if (!url) return;
-    startSession({ type: "url", url });
-    urlInput.value = "";
-  }
+  const files = Array.from(localFileInput.files);
+  if (files.length === 0) return;
+  const singleTitle = files.length === 1 ? localTitleInput.value.trim() : "";
+  files.forEach((file) => startSession(file, singleTitle));
+  localFileInput.value = "";
+  localTitleInput.value = "";
 }
 
 analyzeBtn.addEventListener("click", analyze);
-urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") analyze(); });
 </script>
 </body>
 </html>

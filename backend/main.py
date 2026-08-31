@@ -69,7 +69,7 @@ def _run_analysis(job_id: str, url: Optional[str], local_file: Optional[str] = N
         segments = transcribe(filepath)
 
         _set_job(job_id, status="scoring", segments=segments)
-        clips = score_video(segments, filepath, top_n=10)
+        clips = score_video(segments, filepath, top_n=5)
 
         _set_job(job_id, status="done", clips=clips)
     except Exception as e:

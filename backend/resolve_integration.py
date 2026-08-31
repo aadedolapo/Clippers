@@ -51,11 +51,18 @@ def _get_resolve():
     _setup_resolve_env()
     import DaVinciResolveScript as dvr_script
 
-    _resolve = dvr_script.scriptapp("Resolve")
-    if _resolve is None:
+    resolve = dvr_script.scriptapp("Resolve")
+    # scriptapp("Resolve") can return a non-None object whose methods are all
+    # None instead of failing outright — happens when Resolve's "External
+    # scripting using" preference is off, which otherwise surfaces later as
+    # an opaque "'NoneType' object is not callable" on the first method call.
+    if resolve is None or not callable(getattr(resolve, "GetProjectManager", None)):
         raise RuntimeError(
-            "Could not connect to DaVinci Resolve. Make sure Resolve is open with a project loaded."
+            "Could not connect to DaVinci Resolve. Make sure Resolve is open with a "
+            "project loaded, and External Scripting is enabled in Resolve > "
+            "Preferences > System > General ('External scripting using' = 'Local')."
         )
+    _resolve = resolve
     return _resolve
 
 

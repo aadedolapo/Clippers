@@ -10,9 +10,9 @@ LLM_WEIGHT = 0.7
 AUDIO_WEIGHT = 0.3
 
 
-def score_video(segments: list[dict], audio_path: str, top_n: int = 10) -> list[dict]:
-    llm_windows = score_all_windows(segments)
+def score_video(segments: list[dict], audio_path: str, top_n: int = 5) -> list[dict]:
     energy = analyze_energy(audio_path)
+    llm_windows = score_all_windows(segments, energy=energy)
 
     for w in llm_windows:
         audio_score = window_energy_score(energy, w["start"], w["end"])
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     segments = transcribe(path, model_size="small")
 
     print("Scoring (LLM + audio energy) ...")
-    clips = score_video(segments, path, top_n=10)
+    clips = score_video(segments, path, top_n=5)
 
     print(f"\n{len(clips)} candidate clips:\n")
     for c in clips:
