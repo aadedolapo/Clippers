@@ -33,9 +33,11 @@ so segment [0] in Window 2 is not the same as segment [0] in Window 0. For each 
 window, choose a contiguous range of segments (start_segment to end_segment, \
 inclusive) that forms one complete, standalone narrative or thought — with a clear \
 hook, a clean ending, and nothing important cut off mid-sentence. Prefer a total \
-duration between 30 and 60 seconds when the segments allow it, but don't pad with \
-irrelevant material just to reach 60, and don't cut a thought short just to reach \
-30 — a tighter or longer clip is fine if that's genuinely what the content needs.
+duration between 20 and 35 seconds; 45 seconds is a hard ceiling. End the clip \
+right after the payoff line — never pad with irrelevant material to reach a target \
+length, and never cut a thought short just to stay under one. A shorter clip is \
+fine if that's genuinely what the content needs; anything over 45 seconds is \
+rejected outright.
 
 Frame the "hook", "seo_title", and "seo_description" fields around the IDEA the clip \
 illustrates (discipline, patience, money, relationships, and so on) — not around the \
@@ -98,7 +100,7 @@ Score low (0-3) for: rambling with no clear point, mid-thought fragments, filler
 def build_windows(
     segments: list[dict],
     min_len: float = 20.0,
-    max_len: float = 90.0,
+    max_len: float = 60.0,
     default_stride: float = 45.0,
     target_windows: int = 120,
 ) -> list[dict]:
@@ -233,6 +235,10 @@ def score_batch(client: Anthropic, batch: list[dict]) -> list[dict]:
             print(f"  [warn] bad result for window [{window['start']:.1f}-{window['end']:.1f}]: {e}")
             continue
         chosen = segs[start_idx : end_idx + 1]
+        duration = chosen[-1]["end"] - chosen[0]["start"]
+        if duration > 45.0 or duration < 15.0:
+            print(f"  [warn] rejecting clip [{chosen[0]['start']:.1f}-{chosen[-1]['end']:.1f}] ({duration:.1f}s, outside 15-45s)")
+            continue
 
         out.append({
             "start": chosen[0]["start"],

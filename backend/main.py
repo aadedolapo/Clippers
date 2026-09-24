@@ -82,6 +82,7 @@ def _serialize_clip(c: dict) -> dict:
     return {
         "start": c["start"],
         "end": c["end"],
+        "duration": round(c["end"] - c["start"], 1),
         "score": round(c["combined_score"], 3),
         "reason": c["reason"],
         "text": c["text"],
