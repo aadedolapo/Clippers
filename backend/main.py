@@ -92,6 +92,18 @@ def _serialize_clip(c: dict) -> dict:
         "pinned_line_emphasis": c.get("pinned_line_emphasis", []),
         "seo_title": c["seo_title"],
         "seo_description": c["seo_description"],
+        "scorecard": c["scorecard"],
+    }
+
+
+def _serialize_rejected(c: dict) -> dict:
+    return {
+        "start": c["start"],
+        "end": c["end"],
+        "duration": round(c["end"] - c["start"], 1),
+        "text": c["text"],
+        "reject_reason": c["reject_reason"],
+        "scorecard": c["scorecard"],
     }
 
 
@@ -113,9 +125,9 @@ def _run_analysis(
         segments = transcribe(filepath)
 
         _set_job(job_id, status="scoring", segments=segments)
-        clips = score_video(segments, filepath, top_n=5)
+        clips, rejected = score_video(segments, filepath, top_n=5)
 
-        _set_job(job_id, status="done", clips=clips)
+        _set_job(job_id, status="done", clips=clips, rejected=rejected)
         # Persist hook/title/description (and timing) to disk immediately so
         # they survive a browser refresh even though JOBS is in-memory only.
         copyright_status = storage.save_session(
@@ -171,6 +183,7 @@ def status(job_id: str):
         response["source"] = job.get("source")
         response["copyright_status"] = job.get("copyright_status", storage.DEFAULT_COPYRIGHT_STATUS)
         response["clips"] = [_serialize_clip(c) for c in job["clips"]]
+        response["rejected"] = [_serialize_rejected(c) for c in job.get("rejected", [])]
     return response
 
 

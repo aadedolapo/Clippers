@@ -175,7 +175,7 @@ if __name__ == "__main__":
     segments = transcribe(path, model_size="small")
 
     print("Scoring (LLM + audio energy) ...")
-    clips = score_video(segments, path, top_n=5)
+    clips, _rejected = score_video(segments, path, top_n=5)
 
     print(f"Generating commentary for {len(clips)} clips ...")
     commentary = generate_commentary_for_clips(clips, video_title=os.path.basename(path))

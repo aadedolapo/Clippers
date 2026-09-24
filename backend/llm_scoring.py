@@ -52,9 +52,22 @@ fields:
 - "start_segment": integer, index of the first segment to include (within that \
 window's own numbering)
 - "end_segment": integer, index of the last segment to include, inclusive
-- "score": integer 0-10, how well the resulting clip works as a standalone short clip
-- "reason": one short sentence explaining the score (e.g. "strong hook line", \
-"punchline lands", "emotional beat", "no clear hook, rambling")
+- "scorecard": an object with these fields:
+  - "hook_first_line": the exact first spoken sentence of the chosen clip, verbatim \
+from the transcript (or of the cold open, if one is used)
+  - "hook_pass": boolean, true only if that first line would stop a scroll in under \
+a second on its own, with zero prior context
+  - "hook_reason": one short sentence on why the first line would or wouldn't stop a \
+scroll
+  - "standalone": integer 0-10, how well the clip works with zero context from the \
+rest of the video
+  - "payoff": integer 0-10, strength of the punchline, payoff, or surprising claim
+  - "lane_fit": integer 0-10, how well the clip fits the channel's lanes (see below)
+  - "lane": one of "faith", "mens_growth", "discipline", "purpose", "relationships", \
+"other"
+  - "loopability": integer 0-10, how naturally the clip's last line flows back into \
+its first line, high if it could seamlessly re-loop
+  - "overall": integer 0-10, overall quality of the clip as a standalone short
 - "emphasis_words": array of strings, the exact words from the chosen clip (numbers, \
 punchlines, surprising claims) that should be visually emphasized in captions. \
 Empty array if none stand out.
@@ -94,6 +107,18 @@ relevant keywords and context (who/what/why someone would care), followed by \
 Score high (7-10) for: a strong opening hook, a punchline or payoff, a surprising \
 claim or number, a complete emotional or narrative beat.
 Score low (0-3) for: rambling with no clear point, mid-thought fragments, filler.
+
+Scorecard rules:
+- hook_pass = false if the first line starts mid-thought ("So the…", "And that's \
+why…", "Yeah."), needs earlier context to make sense, is filler or a greeting, or \
+makes no claim and creates no tension. A pass looks like a direct claim, a question, \
+a number, or something said straight to the viewer ("Most men never…", "God will \
+not…", "You're not lazy, you're…").
+- Lane: the channel's core lanes are faith, men's growth, discipline, and purpose. \
+Topics outside these (tech, celebrity gossip, generic social-media stats) score low \
+on lane_fit even if the clip is otherwise strong.
+- Loopability: score high when the last line flows naturally back into the first, \
+so the clip could replay seamlessly.
 """
 
 
@@ -154,12 +179,14 @@ def _chunk(items: list, size: int):
 # Per-window token budget for score_batch. Output includes a variable-size
 # extended-thinking block ahead of the actual JSON (observed 600-2000+
 # thinking tokens per window) sharing the same max_tokens ceiling — sized
-# with generous headroom above the ~500-600 output tokens a single window's
-# JSON object (hook/pinned_line/seo fields, etc.) actually needs, since a
+# with generous headroom above the actual JSON object's own needs, since a
 # too-tight budget causes the response to truncate mid-JSON rather than
 # finish early (confirmed: ~1 in 5 batches truncated at the previous 1024
-# budget once pinned_line/pinned_line_emphasis were added to the schema).
-TOKENS_PER_WINDOW = 2048
+# budget once pinned_line/pinned_line_emphasis were added to the schema; the
+# nested "scorecard" object added in the retention upgrade added enough
+# fields that even 2048 started truncating every batch, so this has more
+# headroom than that field count alone would suggest).
+TOKENS_PER_WINDOW = 4096
 
 
 def _call_and_parse(client: Anthropic, batch: list[dict], prompt: str) -> list[dict]:
@@ -231,7 +258,19 @@ def score_batch(client: Anthropic, batch: list[dict]) -> list[dict]:
             end_idx = int(result["end_segment"])
             if not (0 <= start_idx <= end_idx < len(segs)):
                 raise ValueError(f"segment indices {start_idx}-{end_idx} out of range for {len(segs)} segments")
-        except (KeyError, ValueError) as e:
+            sc_raw = result["scorecard"]
+            scorecard = {
+                "hook_first_line": sc_raw.get("hook_first_line", ""),
+                "hook_pass": bool(sc_raw["hook_pass"]),
+                "hook_reason": sc_raw.get("hook_reason", ""),
+                "standalone": float(sc_raw.get("standalone", 0)),
+                "payoff": float(sc_raw.get("payoff", 0)),
+                "lane_fit": float(sc_raw.get("lane_fit", 0)),
+                "lane": sc_raw.get("lane", "other"),
+                "loopability": float(sc_raw.get("loopability", 0)),
+                "overall": float(sc_raw.get("overall", 0)),
+            }
+        except (KeyError, ValueError, TypeError) as e:
             print(f"  [warn] bad result for window [{window['start']:.1f}-{window['end']:.1f}]: {e}")
             continue
         chosen = segs[start_idx : end_idx + 1]
@@ -244,8 +283,7 @@ def score_batch(client: Anthropic, batch: list[dict]) -> list[dict]:
             "start": chosen[0]["start"],
             "end": chosen[-1]["end"],
             "text": " ".join(s["text"].strip() for s in chosen),
-            "llm_score": float(result["score"]) / 10.0,
-            "reason": result["reason"],
+            "scorecard": scorecard,
             "emphasis_words": result.get("emphasis_words", []),
             "hook": result.get("hook", ""),
             "pinned_line": result.get("pinned_line", ""),
@@ -296,8 +334,10 @@ if __name__ == "__main__":
     energy = analyze_energy(path)
     scored = score_all_windows(segments, energy=energy)
 
-    scored.sort(key=lambda c: c["llm_score"], reverse=True)
+    scored.sort(key=lambda c: c["scorecard"]["overall"], reverse=True)
     for c in scored:
-        print(f"[{c['start']:6.1f}-{c['end']:6.1f}] score={c['llm_score']:.2f}  {c['reason']}")
+        sc = c["scorecard"]
+        pass_tag = "PASS" if sc["hook_pass"] else "FAIL"
+        print(f"[{c['start']:6.1f}-{c['end']:6.1f}] overall={sc['overall']:.1f} hook={pass_tag} lane={sc['lane']}  {sc['hook_reason']}")
         if c["emphasis_words"]:
             print(f"           emphasis: {c['emphasis_words']}")
