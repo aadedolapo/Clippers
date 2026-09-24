@@ -207,6 +207,16 @@
     white-space: nowrap;
   }
   .clip-coldopen-text { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .clip-commentary-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text);
+    margin-bottom: 8px;
+    cursor: pointer;
+    width: fit-content;
+  }
   .clip-download-btn, .clip-broll-btn, .clip-mark-posted-btn {
     padding: 5px 12px;
     font-size: 12px;
@@ -558,6 +568,10 @@ function createSession(name, insertAt) {
             </label>
             <span class="clip-coldopen-text">"${escapeHtml(clip.cold_open.text)}"</span>
           </div>` : ""}
+          <label class="clip-commentary-label">
+            <input type="checkbox" class="clip-commentary-checkbox" />
+            Add Wisement outro
+          </label>
           <div class="clip-fields">${fieldsHtml}</div>
           ${fieldsHtml ? '<button type="button" class="clip-download-btn">Download title/hook/desc</button>' : ""}
           <button type="button" class="clip-broll-btn">Suggest B-roll</button>
@@ -761,7 +775,8 @@ function createSession(name, insertAt) {
       });
       const coldOpenCheckbox = clipEl.querySelector(".clip-coldopen-checkbox");
       const use_cold_open = coldOpenCheckbox ? coldOpenCheckbox.checked : true;
-      return { start: clip.start, end: clip.end, broll, use_cold_open };
+      const with_commentary = clipEl.querySelector(".clip-commentary-checkbox").checked;
+      return { start: clip.start, end: clip.end, broll, use_cold_open, with_commentary };
     });
 
     try {

@@ -474,14 +474,18 @@ def send_clip_with_commentary_to_resolve(
     intro_path: Optional[str] = None,
     close_path: Optional[str] = None,
     framing: str = "fill",
+    cold_open: Optional[dict] = None,
 ) -> None:
     """Same as send_clip_to_resolve, but appends the already-rendered
     commentary segments (background + captions + narration baked in by
     commentary_render.py) as their own timeline items immediately before/
     after the sermon clip range — one continuous sequence on the same
-    timeline, in the order intro -> sermon -> close.
+    timeline, in the order cold_open -> intro -> sermon -> close. cold_open
+    is a sub-range of the same source file (like send_clip_to_resolve's),
+    not a separately rendered segment, so it's appended by frame math
+    before intro_path rather than via _import_media on a rendered file.
 
-    framing applies to all three items ("fit" leaves Resolve's default zoom
+    framing applies to all items ("fit" leaves Resolve's default zoom
     alone, matching the letterboxed look burn_captions now produces by
     default; "fill" crops to fill as before). It's mostly moot for the
     commentary segments themselves since those are already rendered at the
@@ -491,13 +495,19 @@ def send_clip_with_commentary_to_resolve(
     timeline = _get_or_create_timeline(project, media_pool, title)
     project.SetCurrentTimeline(timeline)
 
+    media_pool_item = _import_media(media_pool, filepath)
+    fps_prop = media_pool_item.GetClipProperty("FPS")
+    fps = _parse_fps(fps_prop) if fps_prop else float(project.GetSetting("timelineFrameRate"))
+
+    if cold_open:
+        co_start_frame = round(cold_open["start"] * fps)
+        co_end_frame = max(co_start_frame, round(cold_open["end"] * fps) - 1)
+        _append_clip(media_pool, timeline, media_pool_item, co_start_frame, co_end_frame, framing=framing)
+
     if intro_path:
         intro_item = _import_media(media_pool, intro_path)
         _append_clip(media_pool, timeline, intro_item, framing=framing)
 
-    media_pool_item = _import_media(media_pool, filepath)
-    fps_prop = media_pool_item.GetClipProperty("FPS")
-    fps = _parse_fps(fps_prop) if fps_prop else float(project.GetSetting("timelineFrameRate"))
     start_frame = round(start * fps)
     end_frame = max(start_frame, round(end * fps) - 1)
     _append_clip(media_pool, timeline, media_pool_item, start_frame, end_frame, framing=framing)

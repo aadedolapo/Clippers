@@ -28,6 +28,7 @@ from scoring import score_video
 import broll
 import resolve_integration
 import captions
+import commentary
 import commentary_render
 import performance
 import storage
@@ -68,6 +69,11 @@ class ClipSelection(BaseModel):
     # on when the clip has one, since the retention upgrade is opt-out, not
     # opt-in (the plan's UI is a checkbox to turn it OFF, not on).
     use_cold_open: bool = True
+    # Add a spoken Wisement outro (retention upgrade plan phase 6) — opt-in,
+    # since it's a new editorial layer, not a bug-fix default like
+    # use_cold_open. Intro is deliberately not offered: anything before the
+    # hook hurts retention, so only the outro is ever wired in.
+    with_commentary: bool = False
 
 
 class SendToResolveRequest(BaseModel):
@@ -361,6 +367,27 @@ def send_to_resolve(req: SendToResolveRequest):
                 except Exception:
                     logger.exception(f"B-roll download failed for {sel.preview_url}")
 
+            # Wisement outro (phase 6): rendered once up front so the same
+            # file can both be appended to the Resolve timeline (which
+            # references it by path, so it must outlive this request) and
+            # concatenated into the standalone deliverable mp4 below —
+            # rendering it twice would mean a second TTS call for no reason.
+            commentary_close_path = None
+            commentary_intermediates: list[str] = []
+            if matched is not None and clip.with_commentary:
+                commentary_result = commentary.generate_commentary_for_clips(
+                    [matched], video_title=job["title"], source=job.get("source"),
+                )[0]
+                close_text = commentary_result.get("commentary_close")
+                if close_text:
+                    base = os.path.splitext(os.path.basename(job["filepath"]))[0]
+                    tag = f"{base}_{clip.start:.1f}-{clip.end:.1f}_outro"
+                    close_render = commentary_render.render_commentary_segment(
+                        close_text, job["filepath"], max(0.0, clip.end - 0.5), captions.OUTPUT_DIR, tag,
+                    )
+                    commentary_close_path = close_render["path"]
+                    commentary_intermediates = close_render["intermediates"]
+
             if broll_clips:
                 resolve_integration.send_clip_with_broll_to_resolve(
                     filepath=job["filepath"],
@@ -368,6 +395,15 @@ def send_to_resolve(req: SendToResolveRequest):
                     start=clip.start,
                     end=clip.end,
                     broll_clips=broll_clips,
+                    cold_open=cold_open,
+                )
+            elif commentary_close_path:
+                resolve_integration.send_clip_with_commentary_to_resolve(
+                    filepath=job["filepath"],
+                    title=job["title"],
+                    start=clip.start,
+                    end=clip.end,
+                    close_path=commentary_close_path,
                     cold_open=cold_open,
                 )
             else:
@@ -378,9 +414,10 @@ def send_to_resolve(req: SendToResolveRequest):
                     end=clip.end,
                     cold_open=cold_open,
                 )
+
             caption_path = None
             if matched is not None and cold_open:
-                caption_path = commentary_render.build_clip_with_cold_open(
+                body_path = commentary_render.build_clip_with_cold_open(
                     filepath=job["filepath"],
                     segments=job["segments"],
                     cold_open=cold_open,
@@ -391,7 +428,7 @@ def send_to_resolve(req: SendToResolveRequest):
                     pinned_line_emphasis=pinned_line_emphasis,
                 )
             elif matched is not None:
-                caption_path = captions.burn_captions(
+                body_path = captions.burn_captions(
                     filepath=job["filepath"],
                     segments=job["segments"],
                     start=clip.start,
@@ -400,6 +437,18 @@ def send_to_resolve(req: SendToResolveRequest):
                     pinned_line=pinned_line,
                     pinned_line_emphasis=pinned_line_emphasis,
                 )
+            else:
+                body_path = None
+
+            if body_path is not None and commentary_close_path:
+                base = os.path.splitext(os.path.basename(job["filepath"]))[0]
+                caption_path = os.path.join(captions.OUTPUT_DIR, f"{base}_{clip.start:.1f}-{clip.end:.1f}_final.mp4")
+                commentary_render.concat_segments([body_path, commentary_close_path], caption_path)
+                # commentary_close_path itself is excluded: Resolve's
+                # timeline (above) still references that exact file.
+                commentary_render.cleanup_intermediates([body_path] + commentary_intermediates)
+            else:
+                caption_path = body_path
 
             results.append({
                 "start": clip.start,
