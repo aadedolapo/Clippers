@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from anthropic import Anthropic
 
 from audio_energy import window_energy_score
+import performance
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
@@ -197,8 +198,43 @@ def _chunk(items: list, size: int):
 # headroom than that field count alone would suggest).
 TOKENS_PER_WINDOW = 4096
 
+_feedback_block_logged = False
+
+
+def _build_feedback_block() -> str:
+    """Retention upgrade plan phase 5: once there's enough real posted-clip
+    data, tell the model what has actually worked/flopped on THIS channel —
+    the top 5 and bottom 5 hooks by stayed_to_watch_pct. Deliberately built
+    into the per-call USER message rather than SYSTEM_PROMPT: the system
+    block above is marked cache_control=ephemeral, and this block changes
+    as new performance data comes in, so putting it there would bust that
+    cache on every call instead of just once per day/deploy."""
+    global _feedback_block_logged
+    records = [r for r in performance.load_records() if r.get("stayed_to_watch_pct") is not None]
+    if len(records) < performance.MIN_RECORDS_FOR_FEEDBACK:
+        return ""
+
+    records.sort(key=lambda r: r["stayed_to_watch_pct"], reverse=True)
+    top5, bottom5 = records[:5], records[-5:]
+
+    lines = [
+        "What works on this channel (real posted-clip performance — a signal to "
+        "weigh, not a hard rule):",
+        "Top performers by stayed-to-watch %:",
+    ]
+    lines += [f'  - "{r.get("hook", "")}" — {r["stayed_to_watch_pct"]:.0f}%' for r in top5]
+    lines.append("Lowest performers by stayed-to-watch %:")
+    lines += [f'  - "{r.get("hook", "")}" — {r["stayed_to_watch_pct"]:.0f}%' for r in bottom5]
+
+    if not _feedback_block_logged:
+        print(f"[info] including performance feedback block in prompt ({len(records)} records with stayed_to_watch_pct)")
+        _feedback_block_logged = True
+
+    return "\n".join(lines) + "\n\n"
+
 
 def _call_and_parse(client: Anthropic, batch: list[dict], prompt: str) -> list[dict]:
+    feedback_block = _build_feedback_block()
     message = client.messages.create(
         model=MODEL,
         max_tokens=TOKENS_PER_WINDOW * len(batch),
@@ -207,7 +243,7 @@ def _call_and_parse(client: Anthropic, batch: list[dict], prompt: str) -> list[d
             "text": SYSTEM_PROMPT,
             "cache_control": {"type": "ephemeral"},
         }],
-        messages=[{"role": "user", "content": f"Candidate windows:\n\n{prompt}"}],
+        messages=[{"role": "user", "content": f"{feedback_block}Candidate windows:\n\n{prompt}"}],
     )
     # content[0] isn't reliably the text block — the model can emit a
     # ThinkingBlock (or other non-text block) first, which has no .text

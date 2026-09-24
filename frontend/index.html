@@ -207,7 +207,7 @@
     white-space: nowrap;
   }
   .clip-coldopen-text { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .clip-download-btn, .clip-broll-btn {
+  .clip-download-btn, .clip-broll-btn, .clip-mark-posted-btn {
     padding: 5px 12px;
     font-size: 12px;
     font-weight: 600;
@@ -308,6 +308,43 @@
   }
   .shortlist-send-result { margin-left: 10px; font-size: 12px; }
   .shortlist-empty { color: var(--muted); font-size: 14px; }
+  .csv-import-label {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .clip-performance {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .clip-performance-stats { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .clip-performance-stats input {
+    width: 90px;
+    padding: 5px 8px;
+    font-size: 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+  }
+  .clip-performance-save {
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .clip-performance-result { font-size: 12px; }
 </style>
 </head>
 <body>
@@ -322,6 +359,9 @@
       <h2>Today's picks</h2>
       <input type="date" id="shortlist-date" />
       <button type="button" id="shortlist-refresh" class="secondary">Refresh</button>
+      <label class="csv-import-label" for="performance-csv-input">Import Studio CSV</label>
+      <input type="file" id="performance-csv-input" accept=".csv" style="display: none;" />
+      <span id="performance-csv-result" style="font-size: 12px; color: var(--muted);"></span>
     </div>
     <div id="shortlist-picks" class="shortlist-picks"></div>
   </div>
@@ -523,6 +563,18 @@ function createSession(name, insertAt) {
           <button type="button" class="clip-broll-btn">Suggest B-roll</button>
           <div class="clip-broll"></div>
           <div class="clip-text">${escapeHtml(clip.text)}</div>
+          <div class="clip-performance">
+            <button type="button" class="clip-mark-posted-btn">Mark as posted</button>
+            <div class="clip-performance-stats" style="display: none;">
+              <input type="number" class="clip-perf-stayed" placeholder="Stayed %" min="0" max="100" step="1" />
+              <input type="number" class="clip-perf-views48" placeholder="Views 48h" min="0" step="1" />
+              <input type="number" class="clip-perf-views7d" placeholder="Views 7d" min="0" step="1" />
+              <input type="number" class="clip-perf-likes" placeholder="Likes" min="0" step="1" />
+              <input type="number" class="clip-perf-subs" placeholder="Subs gained" min="0" step="1" />
+              <button type="button" class="clip-performance-save">Save stats</button>
+              <span class="clip-performance-result"></span>
+            </div>
+          </div>
           <div class="clip-result"></div>
         </div>
       `;
@@ -530,6 +582,63 @@ function createSession(name, insertAt) {
       if (downloadBtn) {
         downloadBtn.addEventListener("click", () => downloadClipText(clip, i));
       }
+
+      const markPostedBtn = el.querySelector(".clip-mark-posted-btn");
+      const perfStatsEl = el.querySelector(".clip-performance-stats");
+      const perfResultEl = el.querySelector(".clip-performance-result");
+      markPostedBtn.addEventListener("click", async () => {
+        const url = window.prompt("YouTube URL for this clip:");
+        if (!url) return;
+        markPostedBtn.disabled = true;
+        try {
+          const res = await fetch("/performance", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ video_id: videoId, start: clip.start, end: clip.end, youtube_url: url }),
+          });
+          if (!res.ok) throw new Error(`mark as posted failed (${res.status})`);
+          markPostedBtn.textContent = "Posted ✓";
+          perfStatsEl.style.display = "flex";
+          perfStatsEl.style.flexWrap = "wrap";
+        } catch (e) {
+          perfResultEl.style.color = "var(--bad)";
+          perfResultEl.textContent = e.message;
+        } finally {
+          markPostedBtn.disabled = false;
+        }
+      });
+
+      const perfSaveBtn = el.querySelector(".clip-performance-save");
+      perfSaveBtn.addEventListener("click", async () => {
+        const numOrNull = (val) => (val === "" ? null : Number(val));
+        const body = {
+          video_id: videoId,
+          start: clip.start,
+          end: clip.end,
+          stayed_to_watch_pct: numOrNull(el.querySelector(".clip-perf-stayed").value),
+          views_48h: numOrNull(el.querySelector(".clip-perf-views48").value),
+          views_7d: numOrNull(el.querySelector(".clip-perf-views7d").value),
+          likes: numOrNull(el.querySelector(".clip-perf-likes").value),
+          subs_gained: numOrNull(el.querySelector(".clip-perf-subs").value),
+        };
+        perfSaveBtn.disabled = true;
+        try {
+          const res = await fetch("/performance", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!res.ok) throw new Error(`save stats failed (${res.status})`);
+          perfResultEl.style.color = "var(--good)";
+          perfResultEl.textContent = "Saved";
+        } catch (e) {
+          perfResultEl.style.color = "var(--bad)";
+          perfResultEl.textContent = e.message;
+        } finally {
+          perfSaveBtn.disabled = false;
+        }
+      });
+
       const brollBtn = el.querySelector(".clip-broll-btn");
       const brollEl = el.querySelector(".clip-broll");
       brollBtn.addEventListener("click", async () => {
@@ -845,6 +954,28 @@ async function loadShortlist() {
 shortlistDateInput.value = todayLocalDateStr();
 shortlistRefreshBtn.addEventListener("click", loadShortlist);
 shortlistDateInput.addEventListener("change", loadShortlist);
+
+// Performance CSV import (retention upgrade plan phase 5): a YouTube
+// Studio Shorts export, matched server-side to already-posted clips.
+const performanceCsvInput = document.getElementById("performance-csv-input");
+const performanceCsvResult = document.getElementById("performance-csv-result");
+performanceCsvInput.addEventListener("change", async () => {
+  const file = performanceCsvInput.files[0];
+  if (!file) return;
+  performanceCsvResult.textContent = "Importing…";
+  try {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/performance/import-csv", { method: "POST", body: form });
+    if (!res.ok) throw new Error(`import failed (${res.status})`);
+    const { matched, unmatched } = await res.json();
+    performanceCsvResult.textContent = `Matched ${matched}, unmatched ${unmatched}`;
+  } catch (e) {
+    performanceCsvResult.textContent = e.message;
+  } finally {
+    performanceCsvInput.value = "";
+  }
+});
 
 loadSavedSessions();
 loadShortlist();

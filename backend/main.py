@@ -29,6 +29,7 @@ import broll
 import resolve_integration
 import captions
 import commentary_render
+import performance
 import storage
 
 app = FastAPI(title="Viral Clip Finder")
@@ -76,6 +77,19 @@ class SendToResolveRequest(BaseModel):
 
 class CopyrightStatusRequest(BaseModel):
     status: Literal["unknown", "cleared"]
+
+
+class PerformanceRequest(BaseModel):
+    video_id: str
+    start: float
+    end: float
+    youtube_url: Optional[str] = None
+    posted_at: Optional[float] = None
+    stayed_to_watch_pct: Optional[float] = None
+    views_48h: Optional[int] = None
+    views_7d: Optional[int] = None
+    likes: Optional[int] = None
+    subs_gained: Optional[int] = None
 
 
 def _set_job(job_id: str, **fields):
@@ -252,6 +266,52 @@ def shortlist(date: str, n: int = 2):
 
     backups = [c for c in pool if _clip_key(c) not in picked_keys][:5]
     return {"date": date, "picks": picks, "backups": backups}
+
+
+def _find_persisted_clip(video_id: str, start: float, end: float) -> Optional[dict]:
+    for s in storage.load_sessions():
+        if s["video_id"] != video_id:
+            continue
+        for c in s["clips"]:
+            if abs(c["start"] - start) < 0.5 and abs(c["end"] - end) < 0.5:
+                return c
+    return None
+
+
+@app.post("/performance")
+def mark_performance(req: PerformanceRequest):
+    """Retention upgrade plan phase 5: mark a clip as posted (typically just
+    youtube_url on the first call) and/or record its stats. clip_snapshot
+    comes from storage rather than the in-memory JOBS dict so this still
+    works after a server restart, same as /saved-clips."""
+    clip = _find_persisted_clip(req.video_id, req.start, req.end)
+    record = performance.add_or_update_record(
+        video_id=req.video_id,
+        start=req.start,
+        end=req.end,
+        youtube_url=req.youtube_url,
+        posted_at=req.posted_at,
+        stayed_to_watch_pct=req.stayed_to_watch_pct,
+        views_48h=req.views_48h,
+        views_7d=req.views_7d,
+        likes=req.likes,
+        subs_gained=req.subs_gained,
+        clip_snapshot=clip,
+    )
+    return record
+
+
+@app.get("/performance")
+def list_performance():
+    return {"records": performance.load_records()}
+
+
+@app.post("/performance/import-csv")
+async def import_performance_csv(file: UploadFile = File(...)):
+    """Accepts a YouTube Studio Shorts export (Content -> Shorts -> Export)
+    and updates whichever already-posted records its rows match."""
+    content = (await file.read()).decode("utf-8", errors="replace")
+    return performance.import_csv(content)
 
 
 @app.post("/copyright-status/{video_id}")
