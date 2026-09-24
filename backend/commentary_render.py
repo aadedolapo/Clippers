@@ -28,6 +28,15 @@ def _run_ffmpeg(cmd: list[str], what: str) -> None:
         raise RuntimeError(f"ffmpeg {what} failed: {result.stderr[-2000:]}")
 
 
+def _probe_duration(path: str) -> float:
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", path],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    return float(result.stdout.strip())
+
+
 def _extract_frame(source_path: str, timestamp: float, out_path: str) -> str:
     _run_ffmpeg(
         ["ffmpeg", "-y", "-ss", str(max(0.0, timestamp)), "-i", source_path,
@@ -121,6 +130,78 @@ def concat_segments(paths: list[str], out_path: str) -> str:
         "concat",
     )
     return out_path
+
+
+def concat_with_crossfade(path_a: str, path_b: str, out_path: str, crossfade: float = 0.15) -> str:
+    """Join two mp4s with a short synchronized audio+video crossfade, instead
+    of concat_segments' hard cut — used for the cold-open "flash-forward"
+    (retention upgrade plan phase 3), where a jarring hard cut back into
+    material the viewer may have just heard would undercut the effect.
+    xfade/acrossfade (rather than the concat filter) keep video and audio in
+    sync through the transition: both produce an output of duration
+    dur_a + dur_b - crossfade, with xfade's offset anchored to path_a's own
+    probed duration so the transition starts exactly `crossfade` seconds
+    before its end regardless of that duration."""
+    dur_a = _probe_duration(path_a)
+    offset = max(0.0, dur_a - crossfade)
+    filter_complex = (
+        f"[0:v][1:v]xfade=transition=fade:duration={crossfade}:offset={offset}[v];"
+        f"[0:a][1:a]acrossfade=d={crossfade}[a]"
+    )
+    _run_ffmpeg(
+        ["ffmpeg", "-y", "-i", path_a, "-i", path_b, "-filter_complex", filter_complex,
+         "-map", "[v]", "-map", "[a]",
+         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+         "-c:a", "aac", "-b:a", "128k", out_path],
+        "cold open crossfade",
+    )
+    return out_path
+
+
+def build_clip_with_cold_open(
+    filepath: str,
+    segments: list[dict],
+    cold_open: dict,
+    start: float,
+    end: float,
+    emphasis_words: list[str],
+    output_dir: str = OUTPUT_DIR,
+    preset_name: str = captions.DEFAULT_PRESET,
+    pinned_line: Optional[str] = None,
+    pinned_line_emphasis: Optional[list[str]] = None,
+    crossfade: float = 0.15,
+) -> str:
+    """Render the cold-open bumper (cold_open["start"]/["end"]) and the main
+    clip [start, end) as two independently captioned parts, then join them
+    with a short crossfade — the deliverable mp4 for a clip using a cold
+    open. The cold-open range may fall inside [start, end): that overlap is
+    intentional (the strongest line plays once as the bumper, then again in
+    its natural place in the main clip), so the main clip is always rendered
+    in full regardless of where cold_open sits."""
+    os.makedirs(output_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(filepath))[0]
+    tag_root = f"{base}_{start:.1f}-{end:.1f}"
+
+    cold_path = captions.burn_captions(
+        filepath, segments, cold_open["start"], cold_open["end"], emphasis_words,
+        preset_name=preset_name, output_dir=output_dir,
+    )
+    cold_tag = captions.clip_tag(filepath, cold_open["start"], cold_open["end"], preset_name)
+    cold_ass_path = os.path.join(output_dir, f"{cold_tag}.ass")
+
+    main_path = captions.burn_captions(
+        filepath, segments, start, end, emphasis_words, preset_name=preset_name, output_dir=output_dir,
+        pinned_line=pinned_line, pinned_line_emphasis=pinned_line_emphasis,
+    )
+    main_tag = captions.clip_tag(filepath, start, end, preset_name)
+    intermediates = [cold_path, cold_ass_path, main_path, os.path.join(output_dir, f"{main_tag}.ass")]
+    if pinned_line:
+        intermediates.append(os.path.join(output_dir, f"{main_tag}_pinned.ass"))
+
+    final_path = os.path.join(output_dir, f"{tag_root}_coldopen.mp4")
+    concat_with_crossfade(cold_path, main_path, final_path, crossfade=crossfade)
+    cleanup_intermediates(intermediates)
+    return final_path
 
 
 def build_clip_parts(

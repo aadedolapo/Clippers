@@ -343,7 +343,20 @@ def _insert_broll_overlay(
         raise RuntimeError("Resolve failed to insert a B-roll overlay clip")
 
 
-def send_clip_to_resolve(filepath: str, title: str, start: float, end: float, framing: str = "fill") -> None:
+def send_clip_to_resolve(
+    filepath: str,
+    title: str,
+    start: float,
+    end: float,
+    framing: str = "fill",
+    cold_open: Optional[dict] = None,
+) -> None:
+    """cold_open, when given ({"start", "end"} in source-media seconds), is
+    appended from the same media pool item immediately before the main
+    range — same flash-forward effect as the standalone captioned mp4
+    (commentary_render.build_clip_with_cold_open), but as two plain
+    timeline appends rather than a rendered crossfade, matching how the
+    commentary bookends are appended as separate items."""
     project = _get_project()
     media_pool = project.GetMediaPool()
 
@@ -353,6 +366,11 @@ def send_clip_to_resolve(filepath: str, title: str, start: float, end: float, fr
 
     fps_prop = media_pool_item.GetClipProperty("FPS")
     fps = _parse_fps(fps_prop) if fps_prop else float(project.GetSetting("timelineFrameRate"))
+
+    if cold_open:
+        co_start_frame = round(cold_open["start"] * fps)
+        co_end_frame = max(co_start_frame, round(cold_open["end"] * fps) - 1)
+        _append_clip(media_pool, timeline, media_pool_item, co_start_frame, co_end_frame, framing=framing)
 
     start_frame = round(start * fps)
     end_frame = max(start_frame, round(end * fps) - 1)
@@ -367,6 +385,7 @@ def send_clip_with_broll_to_resolve(
     end: float,
     broll_clips: list[dict],
     framing: str = "fill",
+    cold_open: Optional[dict] = None,
 ) -> None:
     """Same as send_clip_to_resolve, but also drops each already-downloaded
     B-roll pick onto a second video track as a full-frame cutaway (video
@@ -378,6 +397,10 @@ def send_clip_with_broll_to_resolve(
     in the clip}. Offsets come from broll.locate_quote_offset matching each
     pick's source quote against the transcript, so cutaways land near the
     part of the script they illustrate rather than all piling up at frame 0.
+
+    cold_open, when given, is appended before the main clip exactly as in
+    send_clip_to_resolve — B-roll offsets/record-frame math below is
+    unaffected since it's still anchored to main_item's own GetStart().
 
     Best-effort per pick: a bad download/import for one B-roll clip is
     logged and skipped rather than failing the whole send, since the main
@@ -391,6 +414,11 @@ def send_clip_with_broll_to_resolve(
 
     fps_prop = media_pool_item.GetClipProperty("FPS")
     fps = _parse_fps(fps_prop) if fps_prop else float(project.GetSetting("timelineFrameRate"))
+
+    if cold_open:
+        co_start_frame = round(cold_open["start"] * fps)
+        co_end_frame = max(co_start_frame, round(cold_open["end"] * fps) - 1)
+        _append_clip(media_pool, timeline, media_pool_item, co_start_frame, co_end_frame, framing=framing)
 
     clip_start_frame = round(start * fps)
     clip_end_frame = max(clip_start_frame, round(end * fps) - 1)

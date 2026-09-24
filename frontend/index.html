@@ -186,6 +186,27 @@
   }
   .clip-field-copy.copied { color: var(--good); border-color: var(--good); }
   .clip-fields { margin-bottom: 8px; }
+  .clip-coldopen {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(76, 175, 125, 0.08);
+    border: 1px solid rgba(76, 175, 125, 0.3);
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+  .clip-coldopen-label { display: flex; align-items: center; gap: 6px; flex-shrink: 0; cursor: pointer; }
+  .clip-coldopen-badge {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--good);
+    white-space: nowrap;
+  }
+  .clip-coldopen-text { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .clip-download-btn, .clip-broll-btn {
     padding: 5px 12px;
     font-size: 12px;
@@ -434,6 +455,14 @@ function createSession(name, insertAt) {
             <span class="clip-score">${(clip.score * 10).toFixed(1)}/10</span>
           </div>
           <div class="clip-reason">${escapeHtml(clip.reason)}</div>
+          ${clip.cold_open ? `
+          <div class="clip-coldopen">
+            <label class="clip-coldopen-label">
+              <input type="checkbox" class="clip-coldopen-checkbox" checked />
+              <span class="clip-coldopen-badge">⚡ Cold open</span>
+            </label>
+            <span class="clip-coldopen-text">"${escapeHtml(clip.cold_open.text)}"</span>
+          </div>` : ""}
           <div class="clip-fields">${fieldsHtml}</div>
           ${fieldsHtml ? '<button type="button" class="clip-download-btn">Download title/hook/desc</button>' : ""}
           <button type="button" class="clip-broll-btn">Suggest B-roll</button>
@@ -566,7 +595,9 @@ function createSession(name, insertAt) {
           duration: p.duration,
         };
       });
-      return { start: clip.start, end: clip.end, broll };
+      const coldOpenCheckbox = clipEl.querySelector(".clip-coldopen-checkbox");
+      const use_cold_open = coldOpenCheckbox ? coldOpenCheckbox.checked : true;
+      return { start: clip.start, end: clip.end, broll, use_cold_open };
     });
 
     try {

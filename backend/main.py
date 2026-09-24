@@ -28,6 +28,7 @@ from scoring import score_video
 import broll
 import resolve_integration
 import captions
+import commentary_render
 import storage
 
 app = FastAPI(title="Viral Clip Finder")
@@ -62,6 +63,10 @@ class ClipSelection(BaseModel):
     start: float
     end: float
     broll: list[BrollSelection] = []
+    # Per-clip on/off toggle for the cold open a clip may have — defaults to
+    # on when the clip has one, since the retention upgrade is opt-out, not
+    # opt-in (the plan's UI is a checkbox to turn it OFF, not on).
+    use_cold_open: bool = True
 
 
 class SendToResolveRequest(BaseModel):
@@ -93,6 +98,7 @@ def _serialize_clip(c: dict) -> dict:
         "seo_title": c["seo_title"],
         "seo_description": c["seo_description"],
         "scorecard": c["scorecard"],
+        "cold_open": c.get("cold_open"),
     }
 
 
@@ -231,6 +237,7 @@ def send_to_resolve(req: SendToResolveRequest):
             emphasis_words = matched.get("emphasis_words", []) if matched is not None else []
             pinned_line = matched.get("pinned_line", "") if matched is not None else ""
             pinned_line_emphasis = matched.get("pinned_line_emphasis", []) if matched is not None else []
+            cold_open = matched.get("cold_open") if matched is not None and clip.use_cold_open else None
 
             broll_clips = []
             for sel in clip.broll:
@@ -247,6 +254,7 @@ def send_to_resolve(req: SendToResolveRequest):
                     start=clip.start,
                     end=clip.end,
                     broll_clips=broll_clips,
+                    cold_open=cold_open,
                 )
             else:
                 resolve_integration.send_clip_to_resolve(
@@ -254,9 +262,21 @@ def send_to_resolve(req: SendToResolveRequest):
                     title=job["title"],
                     start=clip.start,
                     end=clip.end,
+                    cold_open=cold_open,
                 )
             caption_path = None
-            if matched is not None:
+            if matched is not None and cold_open:
+                caption_path = commentary_render.build_clip_with_cold_open(
+                    filepath=job["filepath"],
+                    segments=job["segments"],
+                    cold_open=cold_open,
+                    start=clip.start,
+                    end=clip.end,
+                    emphasis_words=emphasis_words,
+                    pinned_line=pinned_line,
+                    pinned_line_emphasis=pinned_line_emphasis,
+                )
+            elif matched is not None:
                 caption_path = captions.burn_captions(
                     filepath=job["filepath"],
                     segments=job["segments"],

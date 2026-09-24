@@ -52,6 +52,15 @@ fields:
 - "start_segment": integer, index of the first segment to include (within that \
 window's own numbering)
 - "end_segment": integer, index of the last segment to include, inclusive
+- "cold_open": either null, or an object {"start_segment": i, "end_segment": j} — a \
+2-6 second range of segments from THIS SAME WINDOW (using this window's own \
+numbering, not necessarily inside start_segment/end_segment) holding the single most \
+striking line, usually the same line you'd pick for "pinned_line". Use this only \
+when the natural opening of the chosen clip (start_segment) is weak but a strong \
+line exists elsewhere in the window — it plays as a flash-forward BEFORE the main \
+clip. Leave it null when the natural opening is already strong; don't force one. \
+When you use a cold open, "hook_first_line" and "hook_pass" below must be judged on \
+the cold open's own first line, not the main clip's natural opening.
 - "scorecard": an object with these fields:
   - "hook_first_line": the exact first spoken sentence of the chosen clip, verbatim \
 from the transcript (or of the cold open, if one is used)
@@ -279,10 +288,31 @@ def score_batch(client: Anthropic, batch: list[dict]) -> list[dict]:
             print(f"  [warn] rejecting clip [{chosen[0]['start']:.1f}-{chosen[-1]['end']:.1f}] ({duration:.1f}s, outside 15-45s)")
             continue
 
+        cold_open = None
+        cold_open_raw = result.get("cold_open")
+        if cold_open_raw:
+            try:
+                co_start_idx = int(cold_open_raw["start_segment"])
+                co_end_idx = int(cold_open_raw["end_segment"])
+                if not (0 <= co_start_idx <= co_end_idx < len(segs)):
+                    raise ValueError(f"cold_open segment indices {co_start_idx}-{co_end_idx} out of range for {len(segs)} segments")
+                co_segs = segs[co_start_idx : co_end_idx + 1]
+                co_duration = co_segs[-1]["end"] - co_segs[0]["start"]
+                if not (2.0 <= co_duration <= 6.0):
+                    raise ValueError(f"cold_open duration {co_duration:.1f}s outside 2-6s")
+                cold_open = {
+                    "start": co_segs[0]["start"],
+                    "end": co_segs[-1]["end"],
+                    "text": " ".join(s["text"].strip() for s in co_segs),
+                }
+            except (KeyError, ValueError, TypeError) as e:
+                print(f"  [warn] dropping cold_open for clip [{chosen[0]['start']:.1f}-{chosen[-1]['end']:.1f}]: {e}")
+
         out.append({
             "start": chosen[0]["start"],
             "end": chosen[-1]["end"],
             "text": " ".join(s["text"].strip() for s in chosen),
+            "cold_open": cold_open,
             "scorecard": scorecard,
             "emphasis_words": result.get("emphasis_words", []),
             "hook": result.get("hook", ""),
@@ -339,5 +369,8 @@ if __name__ == "__main__":
         sc = c["scorecard"]
         pass_tag = "PASS" if sc["hook_pass"] else "FAIL"
         print(f"[{c['start']:6.1f}-{c['end']:6.1f}] overall={sc['overall']:.1f} hook={pass_tag} lane={sc['lane']}  {sc['hook_reason']}")
+        if c["cold_open"]:
+            co = c["cold_open"]
+            print(f"           cold open [{co['start']:.1f}-{co['end']:.1f}]: {co['text']!r}")
         if c["emphasis_words"]:
             print(f"           emphasis: {c['emphasis_words']}")
