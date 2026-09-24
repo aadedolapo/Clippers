@@ -8,3 +8,4 @@ backend/assets/
 output/
 *.aiff
 .claude/
+.DS_Store
