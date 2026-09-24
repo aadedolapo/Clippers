@@ -33,9 +33,15 @@ so segment [0] in Window 2 is not the same as segment [0] in Window 0. For each 
 window, choose a contiguous range of segments (start_segment to end_segment, \
 inclusive) that forms one complete, standalone narrative or thought — with a clear \
 hook, a clean ending, and nothing important cut off mid-sentence. Prefer a total \
-duration between 60 and 90 seconds when the segments allow it, but don't pad with \
-irrelevant material just to reach 90, and don't cut a thought short just to reach \
-60 — a tighter or longer clip is fine if that's genuinely what the content needs.
+duration between 30 and 60 seconds when the segments allow it, but don't pad with \
+irrelevant material just to reach 60, and don't cut a thought short just to reach \
+30 — a tighter or longer clip is fine if that's genuinely what the content needs.
+
+Frame the "hook", "seo_title", and "seo_description" fields around the IDEA the clip \
+illustrates (discipline, patience, money, relationships, and so on) — not around the \
+speaker's identity. The speaker is evidence supporting the lesson, not the star of the \
+video; avoid framing like "[speaker] says this" unless the speaker's own identity is \
+genuinely the point of the clip.
 
 Respond with a single JSON array (no prose, no markdown fences), one object per \
 window, in the same order the windows were given. Each object must have these \
@@ -61,6 +67,16 @@ these patterns:
   * a withheld payoff ("She said WHAT to her boss?")
 Avoid flat descriptions ("A story about overcoming fear"), generic phrasing \
 ("Amazing life lesson"), and anything that spoils the ending.
+- "pinned_line": the single strongest VERBATIM (or lightly trimmed for grammar/ \
+flow — never paraphrased or invented) sentence actually spoken within the chosen \
+clip. Unlike "hook", this is a real quote from the transcript, not a tease — pick \
+whichever line is most likely to be quoted or screenshotted on its own: the \
+punchline, the most surprising claim, or the sharpest turn of phrase. Keep it to \
+one sentence; trimming leading/trailing filler is fine, rewording is not.
+- "pinned_line_emphasis": array of 1-3 words or short phrases, each an exact \
+substring of "pinned_line", to visually highlight — the specific words carrying \
+the line's weight (a number, a name, the key verb or claim). Empty array only if \
+truly nothing in the line stands out.
 - "seo_title": a searchable, keyword-rich title for the platform's title/caption \
 field — NOT the same job as "hook". Where the hook is pure curiosity-gap bait \
 for the on-screen overlay, this is what actually gets typed into YouTube \
@@ -133,17 +149,21 @@ def _chunk(items: list, size: int):
         yield items[i : i + size]
 
 
-def score_batch(client: Anthropic, batch: list[dict]) -> list[dict]:
-    parts = []
-    for i, window in enumerate(batch):
-        segs = window["segments"]
-        numbered = "\n".join(f"[{j}] {s['start']:.1f}s-{s['end']:.1f}s: {s['text'].strip()}" for j, s in enumerate(segs))
-        parts.append(f"Window {i}:\n{numbered}")
-    prompt = "\n\n".join(parts)
+# Per-window token budget for score_batch. Output includes a variable-size
+# extended-thinking block ahead of the actual JSON (observed 600-2000+
+# thinking tokens per window) sharing the same max_tokens ceiling — sized
+# with generous headroom above the ~500-600 output tokens a single window's
+# JSON object (hook/pinned_line/seo fields, etc.) actually needs, since a
+# too-tight budget causes the response to truncate mid-JSON rather than
+# finish early (confirmed: ~1 in 5 batches truncated at the previous 1024
+# budget once pinned_line/pinned_line_emphasis were added to the schema).
+TOKENS_PER_WINDOW = 2048
 
+
+def _call_and_parse(client: Anthropic, batch: list[dict], prompt: str) -> list[dict]:
     message = client.messages.create(
         model=MODEL,
-        max_tokens=1024 * len(batch),
+        max_tokens=TOKENS_PER_WINDOW * len(batch),
         system=[{
             "type": "text",
             "text": SYSTEM_PROMPT,
@@ -164,9 +184,32 @@ def score_batch(client: Anthropic, batch: list[dict]) -> list[dict]:
         if raw.startswith("json"):
             raw = raw[4:]
         raw = raw.strip()
+    if message.stop_reason == "max_tokens":
+        raise RuntimeError(f"response truncated at max_tokens ({TOKENS_PER_WINDOW * len(batch)})")
     results_raw = json.loads(raw)
     if not isinstance(results_raw, list):
         raise ValueError("expected a JSON array of per-window results")
+    return results_raw
+
+
+def score_batch(client: Anthropic, batch: list[dict]) -> list[dict]:
+    parts = []
+    for i, window in enumerate(batch):
+        segs = window["segments"]
+        numbered = "\n".join(f"[{j}] {s['start']:.1f}s-{s['end']:.1f}s: {s['text'].strip()}" for j, s in enumerate(segs))
+        parts.append(f"Window {i}:\n{numbered}")
+    prompt = "\n\n".join(parts)
+
+    # A malformed/truncated JSON response is rare but not deterministic
+    # (observed ~1 in 5 with extended thinking's variable token usage) — one
+    # retry recovers the whole batch instead of silently dropping every
+    # window in it, which previously meant a short video's only batch
+    # failing could produce zero clips end to end.
+    try:
+        results_raw = _call_and_parse(client, batch, prompt)
+    except (json.JSONDecodeError, RuntimeError, ValueError) as e:
+        print(f"  [warn] batch response failed to parse ({e}), retrying once")
+        results_raw = _call_and_parse(client, batch, prompt)
 
     by_index = {}
     for item in results_raw:
@@ -199,6 +242,8 @@ def score_batch(client: Anthropic, batch: list[dict]) -> list[dict]:
             "reason": result["reason"],
             "emphasis_words": result.get("emphasis_words", []),
             "hook": result.get("hook", ""),
+            "pinned_line": result.get("pinned_line", ""),
+            "pinned_line_emphasis": result.get("pinned_line_emphasis", []),
             "seo_title": result.get("seo_title", ""),
             "seo_description": result.get("seo_description", ""),
         })

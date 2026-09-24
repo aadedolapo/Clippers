@@ -100,6 +100,29 @@
   }
   .session.collapsed .session-toggle { transform: rotate(-90deg); }
   .session.collapsed .session-body { display: none; }
+  .compliance-badge {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .compliance-badge.unknown {
+    background: rgba(224, 97, 107, 0.12);
+    border-color: var(--bad);
+    color: var(--bad);
+  }
+  .compliance-badge.cleared {
+    background: rgba(76, 175, 125, 0.12);
+    border-color: var(--good);
+    color: var(--good);
+  }
   .session-error {
     margin-top: 12px;
     padding: 12px 14px;
@@ -163,7 +186,7 @@
   }
   .clip-field-copy.copied { color: var(--good); border-color: var(--good); }
   .clip-fields { margin-bottom: 8px; }
-  .clip-download-btn {
+  .clip-download-btn, .clip-broll-btn {
     padding: 5px 12px;
     font-size: 12px;
     font-weight: 600;
@@ -173,7 +196,33 @@
     color: var(--text);
     cursor: pointer;
     margin-bottom: 8px;
+    margin-right: 8px;
   }
+  .clip-broll { margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .clip-broll-pick {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    background: rgba(110, 168, 254, 0.06);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .clip-broll-checkbox { flex-shrink: 0; }
+  .clip-broll-thumb {
+    width: 64px;
+    height: 64px;
+    object-fit: cover;
+    border-radius: 6px;
+    flex-shrink: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+  }
+  .clip-broll-meta { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); }
+  .clip-broll-meta a { color: var(--accent); font-weight: 600; text-decoration: none; }
+  .clip-broll-meta a:hover { text-decoration: underline; }
+  .clip-broll-query { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin-bottom: 2px; }
+  .clip-broll-confidence { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--good); }
   .clip-text {
     font-size: 13px;
     color: var(--text);
@@ -204,9 +253,10 @@
   <div class="row">
     <input type="file" id="local-file-input" accept="video/*" multiple />
     <input type="text" id="local-title-input" placeholder="Title (optional, single file only)" style="flex: 0 0 220px;" />
+    <input type="text" id="local-source-input" placeholder="Church/speaker (optional, single file only)" style="flex: 0 0 220px;" />
     <button id="analyze-btn">Analyze</button>
   </div>
-  <p style="margin-top: 10px; font-size: 13px; color: var(--muted);">Select one or more video files to queue them all at once.</p>
+  <p style="margin-top: 10px; font-size: 13px; color: var(--muted);">Select one or more video files to queue them all at once. Source is logged per video for future permission outreach and claim tracing.</p>
 
   <div id="sessions"></div>
 </main>
@@ -215,6 +265,7 @@
 const analyzeBtn = document.getElementById("analyze-btn");
 const localFileInput = document.getElementById("local-file-input");
 const localTitleInput = document.getElementById("local-title-input");
+const localSourceInput = document.getElementById("local-source-input");
 const sessionsEl = document.getElementById("sessions");
 
 function fmtTime(sec) {
@@ -247,17 +298,19 @@ function downloadClipText(clip, index) {
   URL.revokeObjectURL(url);
 }
 
-// Each call to startSession owns one video end-to-end (upload/analyze, poll,
-// render its own clip list, send its own selections to Resolve) via closures
-// scoped to that session's DOM block — independent of every other session,
-// so multiple videos can be queued and worked on at once.
-function startSession(file, titleOverride) {
+// Each session (whether freshly analyzed or restored from disk) owns one
+// video end-to-end (poll/render its own clip list, send its own selections
+// to Resolve) via closures scoped to that session's DOM block — independent
+// of every other session, so multiple videos can be queued and worked on at
+// once, and past sessions survive a page refresh.
+function createSession(name, insertAt) {
   const root = document.createElement("div");
   root.className = "session";
   root.innerHTML = `
     <div class="session-header">
       <span class="session-toggle">▾</span>
-      <h2 class="session-name">${escapeHtml(file.name)}</h2>
+      <h2 class="session-name">${escapeHtml(name)}</h2>
+      <span class="compliance-badge unknown" title="Click to toggle copyright status">⚠️ Copyright: unknown</span>
       <span class="session-status">Starting…</span>
     </div>
     <div class="session-body">
@@ -269,7 +322,11 @@ function startSession(file, titleOverride) {
       </div>
     </div>
   `;
-  sessionsEl.prepend(root);
+  if (insertAt === "end") {
+    sessionsEl.appendChild(root);
+  } else {
+    sessionsEl.prepend(root);
+  }
 
   root.querySelector(".session-header").addEventListener("click", () => {
     root.classList.toggle("collapsed");
@@ -282,9 +339,42 @@ function startSession(file, titleOverride) {
   const sendBar = root.querySelector(".session-send-bar");
   const sendBtn = root.querySelector(".session-send-btn");
   const sendCount = root.querySelector(".session-send-count");
+  const complianceEl = root.querySelector(".compliance-badge");
 
   let videoId = null;
   let clips = [];
+
+  // PRD §14 compliance layer: always renders as a warning until a human
+  // explicitly clicks it to mark the source cleared — the system itself
+  // never sets this to "cleared".
+  function setComplianceStatus(status) {
+    const s = status === "cleared" ? "cleared" : "unknown";
+    complianceEl.dataset.status = s;
+    complianceEl.className = `compliance-badge ${s}`;
+    complianceEl.textContent = s === "cleared" ? "✅ Copyright: cleared" : "⚠️ Copyright: unknown";
+    complianceEl.style.display = "inline-flex";
+  }
+
+  complianceEl.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!videoId) return;
+    const next = complianceEl.dataset.status === "cleared" ? "unknown" : "cleared";
+    complianceEl.style.opacity = "0.6";
+    try {
+      const res = await fetch(`/copyright-status/${videoId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: next }),
+      });
+      if (!res.ok) throw new Error(`copyright status update failed (${res.status})`);
+      const data = await res.json();
+      setComplianceStatus(data.copyright_status);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      complianceEl.style.opacity = "1";
+    }
+  });
 
   function setError(msg) {
     if (!msg) {
@@ -346,6 +436,8 @@ function startSession(file, titleOverride) {
           <div class="clip-reason">${escapeHtml(clip.reason)}</div>
           <div class="clip-fields">${fieldsHtml}</div>
           ${fieldsHtml ? '<button type="button" class="clip-download-btn">Download title/hook/desc</button>' : ""}
+          <button type="button" class="clip-broll-btn">Suggest B-roll</button>
+          <div class="clip-broll"></div>
           <div class="clip-text">${escapeHtml(clip.text)}</div>
           <div class="clip-result"></div>
         </div>
@@ -354,6 +446,48 @@ function startSession(file, titleOverride) {
       if (downloadBtn) {
         downloadBtn.addEventListener("click", () => downloadClipText(clip, i));
       }
+      const brollBtn = el.querySelector(".clip-broll-btn");
+      const brollEl = el.querySelector(".clip-broll");
+      brollBtn.addEventListener("click", async () => {
+        brollBtn.disabled = true;
+        brollBtn.textContent = "Searching…";
+        brollEl.innerHTML = "";
+        try {
+          const res = await fetch(`/broll/${videoId}/${i}`, { method: "POST" });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.detail || `B-roll search failed (${res.status})`);
+          if (!data.picks || data.picks.length === 0) {
+            brollEl.innerHTML = `<div style="color: var(--muted); font-size: 12px;">No B-roll candidates found.</div>`;
+          } else {
+            clip.brollPicks = data.picks;
+            brollEl.innerHTML = data.picks
+              .map((p, pi) => {
+                const thumb = p.thumbnail_url
+                  ? `<img class="clip-broll-thumb" src="${escapeHtml(p.thumbnail_url)}" alt="" />`
+                  : `<div class="clip-broll-thumb"></div>`;
+                const confidence = p.confidence != null ? `${p.confidence}%` : "unscored";
+                const timing = p.offset != null ? `${p.offset.toFixed(1)}s in` : "timing unmatched — will play at clip start";
+                return `
+                  <div class="clip-broll-pick">
+                    <input type="checkbox" class="clip-broll-checkbox" data-pick-index="${pi}" />
+                    ${thumb}
+                    <div class="clip-broll-meta">
+                      <div class="clip-broll-query">${escapeHtml(p.query)} · ${escapeHtml(p.provider)} · ${escapeHtml(timing)}</div>
+                      <a href="${escapeHtml(p.page_url)}" target="_blank" rel="noopener">View source</a>
+                      — <span class="clip-broll-confidence">${confidence}</span>
+                      <div>${escapeHtml(p.reason || "")}</div>
+                    </div>
+                  </div>`;
+              })
+              .join("");
+          }
+        } catch (e) {
+          brollEl.innerHTML = `<div style="color: var(--bad); font-size: 12px;">${escapeHtml(e.message)}</div>`;
+        } finally {
+          brollBtn.disabled = false;
+          brollBtn.textContent = "Suggest B-roll";
+        }
+      });
       el.querySelectorAll(".clip-field").forEach((fieldEl) => {
         const value = clip[fieldEl.dataset.field];
         const copyBtn = fieldEl.querySelector(".clip-field-copy");
@@ -395,6 +529,7 @@ function startSession(file, titleOverride) {
           nameEl.textContent = data.title;
           videoId = data.video_id;
           clips = data.clips;
+          setComplianceStatus(data.copyright_status);
           renderClips();
           return;
         }
@@ -416,8 +551,22 @@ function startSession(file, titleOverride) {
     sendBtn.textContent = "Sending...";
 
     const selectedClips = selected.map((cb) => {
-      const idx = Number(cb.closest(".clip").dataset.index);
-      return { start: clips[idx].start, end: clips[idx].end };
+      const clipEl = cb.closest(".clip");
+      const idx = Number(clipEl.dataset.index);
+      const clip = clips[idx];
+      const checkedBrollBoxes = Array.from(clipEl.querySelectorAll(".clip-broll-checkbox")).filter((c) => c.checked);
+      const broll = checkedBrollBoxes.map((bc) => {
+        const p = clip.brollPicks[Number(bc.dataset.pickIndex)];
+        return {
+          provider: p.provider,
+          id: p.id != null ? String(p.id) : null,
+          preview_url: p.preview_url,
+          query: p.query,
+          offset: p.offset,
+          duration: p.duration,
+        };
+      });
+      return { start: clip.start, end: clip.end, broll };
     });
 
     try {
@@ -434,7 +583,8 @@ function startSession(file, titleOverride) {
         const r = results[i];
         if (r.success) {
           resultEl.className = "clip-result ok";
-          resultEl.textContent = `Sent to Resolve${r.captioned_mp4 ? ` — captioned mp4: ${r.captioned_mp4}` : ""}`;
+          const mp4Note = r.captioned_mp4 ? ` — captioned mp4: ${escapeHtml(r.captioned_mp4)}` : "";
+          resultEl.innerHTML = `Sent to Resolve${mp4Note}`;
         } else {
           resultEl.className = "clip-result fail";
           resultEl.textContent = `Failed: ${r.error}`;
@@ -448,18 +598,37 @@ function startSession(file, titleOverride) {
     }
   });
 
+  return {
+    setName: (name) => { nameEl.textContent = name; },
+    setStatus: (text) => { statusEl.textContent = text; },
+    setError,
+    setDone: (id, clipList, copyrightStatus) => {
+      videoId = id;
+      clips = clipList;
+      setComplianceStatus(copyrightStatus);
+      renderClips();
+    },
+    poll,
+  };
+}
+
+// Kicks off a brand-new upload → analyze → poll flow for a freshly selected file.
+function startSession(file, titleOverride, sourceOverride) {
+  const session = createSession(file.name, "start");
+  session.setStatus("Starting…");
+
   (async () => {
     try {
-      statusEl.textContent = "Uploading…";
+      session.setStatus("Uploading…");
       const form = new FormData();
       form.append("file", file);
       const uploadRes = await fetch("/upload", { method: "POST", body: form });
       if (!uploadRes.ok) throw new Error(`upload failed (${uploadRes.status})`);
       const { local_file, title } = await uploadRes.json();
-      const body = { local_file, title: titleOverride || title };
-      nameEl.textContent = body.title;
+      const body = { local_file, title: titleOverride || title, source: sourceOverride || undefined };
+      session.setName(body.title);
 
-      statusEl.textContent = "Starting…";
+      session.setStatus("Starting…");
       const res = await fetch("/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -467,22 +636,45 @@ function startSession(file, titleOverride) {
       });
       if (!res.ok) throw new Error(`analyze request failed (${res.status})`);
       const { job_id } = await res.json();
-      poll(job_id);
+      session.poll(job_id);
     } catch (e) {
-      statusEl.textContent = "Error";
-      setError(e.message);
+      session.setStatus("Error");
+      session.setError(e.message);
     }
   })();
+}
+
+// Rebuilds a session's UI straight from previously saved hook/title/description
+// data — no re-upload or re-analysis — so a browser refresh doesn't lose it.
+function restoreSession(saved) {
+  const session = createSession(saved.title, "end");
+  session.setStatus("Restored");
+  session.setDone(saved.video_id, saved.clips, saved.copyright_status);
+}
+
+async function loadSavedSessions() {
+  try {
+    const res = await fetch("/saved-clips");
+    if (!res.ok) return;
+    const { sessions } = await res.json();
+    sessions.forEach(restoreSession);
+  } catch (e) {
+    console.error("Failed to load saved clips", e);
+  }
 }
 
 function analyze() {
   const files = Array.from(localFileInput.files);
   if (files.length === 0) return;
   const singleTitle = files.length === 1 ? localTitleInput.value.trim() : "";
-  files.forEach((file) => startSession(file, singleTitle));
+  const singleSource = files.length === 1 ? localSourceInput.value.trim() : "";
+  files.forEach((file) => startSession(file, singleTitle, singleSource));
   localFileInput.value = "";
   localTitleInput.value = "";
+  localSourceInput.value = "";
 }
+
+loadSavedSessions();
 
 analyzeBtn.addEventListener("click", analyze);
 </script>

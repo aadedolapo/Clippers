@@ -7,3 +7,5 @@ anthropic
 librosa
 soundfile
 python-dotenv
+elevenlabs
+requests

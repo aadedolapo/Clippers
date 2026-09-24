@@ -33,7 +33,7 @@ def _is_video_track_static(filepath: str, sample_count: int = 4) -> bool:
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", filepath],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     try:
         duration = float(probe.stdout.strip())

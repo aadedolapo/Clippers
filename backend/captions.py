@@ -5,6 +5,7 @@ highlight captions, emphasis words visually distinct, swappable style presets.
 
 import os
 import subprocess
+from typing import Optional
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "output")
 
@@ -50,6 +51,45 @@ STYLE_PRESETS = {
         "margin_v": 80,
     },
 }
+
+# Commentary bookends get their own style, deliberately distinct from
+# STYLE_PRESETS above — a different visual identity signals to the viewer
+# that this is original spoken commentary, not part of the reused clip.
+COMMENTARY_STYLE_PRESETS = {
+    "commentary-clean": {
+        "fontname": "Helvetica Neue",
+        "fontsize": 24,
+        "primary_colour": "&H00E6C229",   # sung: teal/cyan
+        "secondary_colour": "&H00FFFFFF",  # unsung: white
+        "outline_colour": "&H00000000",
+        "back_colour": "&H80000000",
+        "bold": -1,
+        "outline": 2.5,
+        "shadow": 1,
+        "alignment": 5,   # middle-center, vs. the sermon captions' bottom alignment
+        "margin_v": 0,
+    },
+}
+DEFAULT_COMMENTARY_PRESET = "commentary-clean"
+
+# The persistent top-pinned "strongest line" overlay — a single static line
+# for the clip's full duration, distinct from both the bottom karaoke
+# captions and the commentary style (top-aligned instead of bottom/middle).
+PINNED_LINE_STYLE = {
+    "fontname": "Arial Black",
+    "fontsize": 24,
+    "primary_colour": "&H00FFFFFF",   # white — no karaoke reveal on this line, so no "unsung" state
+    "secondary_colour": "&H00FFFFFF",
+    "outline_colour": "&H00000000",
+    "back_colour": "&H80000000",
+    "bold": -1,
+    "outline": 3,
+    "shadow": 0,
+    "alignment": 8,   # top-center
+    "margin_v": 90,   # distance from the TOP edge (alignment=8 measures margin_v from the top)
+}
+# ASS colours are &HBBGGRR — pure red is &H0000FF (blue=00, green=00, red=FF).
+PINNED_EMPHASIS_COLOUR = "&H0000FF&"
 
 DEFAULT_PRESET = "bold-white"
 EMPHASIS_SCALE = 130  # % font scale for emphasis words
@@ -170,6 +210,76 @@ def generate_ass(
     return ass
 
 
+def generate_commentary_ass(words: list[dict], preset_name: str = DEFAULT_COMMENTARY_PRESET) -> str:
+    """Build ASS captions for a standalone TTS commentary segment. `words` are
+    already timed from t=0 (the segment's own timeline, not a slice of a
+    larger source) — shaped like whisper's word dicts ({"word","start","end"})
+    so this reuses the same karaoke-highlight machinery as the sermon clip's
+    captions, just with COMMENTARY_STYLE_PRESETS instead."""
+    preset = COMMENTARY_STYLE_PRESETS.get(preset_name, COMMENTARY_STYLE_PRESETS[DEFAULT_COMMENTARY_PRESET])
+    lines = _group_into_lines(words, max_words_per_line=5)
+
+    ass = _build_ass_header(preset)
+    for line_words in lines:
+        if not line_words:
+            continue
+        line_start = max(0.0, line_words[0]["start"])
+        line_end = max(line_start, line_words[-1]["end"])
+        text = _karaoke_text(line_words, clip_start=0.0, emphasis_set=set())
+        ass += f"Dialogue: 0,{_fmt_ass_time(line_start)},{_fmt_ass_time(line_end)},Default,,0,0,0,,{text}\n"
+
+    return ass
+
+
+def generate_static_overlay_ass(
+    pinned_line: str,
+    pinned_line_emphasis: list[str],
+    duration: float,
+    style: dict = PINNED_LINE_STYLE,
+) -> str:
+    """Build a standalone ASS file with ONE static dialogue line spanning the
+    full clip [0, duration) — the single strongest verbatim line, pinned at
+    the top of frame for the whole clip. Unlike generate_ass's word-by-word
+    karaoke reveal, this line is fully visible throughout; only the emphasis
+    keywords are visually distinguished, via a red colour override instead
+    of a reveal effect."""
+    # pinned_line_emphasis may be short phrases, not single words — split
+    # into individual tokens for matching, same convention generate_ass uses
+    # for emphasis_words.
+    emphasis_set = {
+        token.strip(".,!?\"'").lower()
+        for phrase in pinned_line_emphasis
+        for token in phrase.split()
+    }
+
+    parts = []
+    for word in pinned_line.split():
+        bare = word.strip(".,!?\"'").lower()
+        if bare in emphasis_set:
+            parts.append(f"{{\\c{PINNED_EMPHASIS_COLOUR}}}{word}{{\\r}}")
+        else:
+            parts.append(word)
+    text = " ".join(parts)
+
+    ass = _build_ass_header(style)
+    ass += f"Dialogue: 0,{_fmt_ass_time(0.0)},{_fmt_ass_time(duration)},Default,,0,0,0,,{text}\n"
+    return ass
+
+
+def clip_tag(
+    filepath: str,
+    start: float,
+    end: float,
+    preset_name: str = DEFAULT_PRESET,
+) -> str:
+    """The deterministic filename tag burn_captions derives its output paths
+    from. Shared here so callers that need to derive a *companion* filename
+    for the same clip (cleanup in commentary_render.py) call this instead of
+    duplicating the formula and risking drift if it ever changes."""
+    base = os.path.splitext(os.path.basename(filepath))[0]
+    return f"{base}_{start:.1f}-{end:.1f}_{preset_name}"
+
+
 def burn_captions(
     filepath: str,
     segments: list[dict],
@@ -178,29 +288,54 @@ def burn_captions(
     emphasis_words: list[str],
     preset_name: str = DEFAULT_PRESET,
     output_dir: str = OUTPUT_DIR,
+    pinned_line: Optional[str] = None,
+    pinned_line_emphasis: Optional[list[str]] = None,
 ) -> str:
-    """Trim [start, end) from filepath, burn word-by-word ASS captions, write to output_dir."""
+    """Trim [start, end) from filepath, burn word-by-word ASS captions, write
+    to output_dir. Center-crops the landscape source to fill the 9:16
+    portrait canvas edge-to-edge (no letterbox bars) — the standard
+    full-bleed vertical-video look.
+
+    pinned_line (with pinned_line_emphasis), when given, adds a second,
+    independent static overlay — the clip's single strongest verbatim line,
+    pinned at the top of frame for the whole duration, emphasis keywords in
+    red — rendered as a second chained `ass=` filter stage so it burns in
+    alongside the bottom karaoke captions in the same ffmpeg pass.
+    """
     os.makedirs(output_dir, exist_ok=True)
 
-    base = os.path.splitext(os.path.basename(filepath))[0]
-    tag = f"{base}_{start:.1f}-{end:.1f}_{preset_name}"
+    tag = clip_tag(filepath, start, end, preset_name)
     ass_path = os.path.join(output_dir, f"{tag}.ass")
     out_path = os.path.join(output_dir, f"{tag}_captioned.mp4")
 
     ass_content = generate_ass(segments, start, end, emphasis_words, preset_name)
-    with open(ass_path, "w") as f:
+    with open(ass_path, "w", encoding="utf-8") as f:
         f.write(ass_content)
 
     duration = end - start
     # ass_path may contain characters ffmpeg's filtergraph parser treats specially;
-    # escape for use inside the -vf ass=... argument.
+    # escape for use inside the -vf/-filter_complex ass=... argument.
     escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
-    # Center-crop landscape source to 9:16 (discards left/right, keeps full height),
-    # then scale to the portrait delivery resolution before burning captions.
+    ass_filters = f"ass={escaped_ass_path}"
+    if pinned_line:
+        pinned_ass_path = os.path.join(output_dir, f"{tag}_pinned.ass")
+        pinned_ass_content = generate_static_overlay_ass(pinned_line, pinned_line_emphasis or [], duration)
+        with open(pinned_ass_path, "w", encoding="utf-8") as f:
+            f.write(pinned_ass_content)
+        escaped_pinned_ass_path = pinned_ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        # Chaining a second `ass=` stage burns it in on top of whatever the
+        # first stage already rendered — the two files use disjoint screen
+        # regions (top-pinned vs. bottom karaoke) so there's no visual
+        # conflict, and this avoids merging two style blocks into one file.
+        ass_filters += f",ass={escaped_pinned_ass_path}"
+
+    # Center-crop landscape source to 9:16 (discards left/right, keeps full
+    # height), then scale to the portrait delivery resolution before burning
+    # captions.
     crop = "crop=ih*9/16:ih:(iw-ih*9/16)/2:0"
     scale = f"scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}"
-    vf = f"{crop},{scale},ass={escaped_ass_path}"
+    vf = f"{crop},{scale},{ass_filters}"
 
     cmd = [
         "ffmpeg", "-y",
@@ -210,7 +345,9 @@ def burn_captions(
         "-c:a", "aac", "-b:a", "128k",
         out_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # See commentary_render._run_ffmpeg for why encoding is explicit here —
+    # ffmpeg's stderr can echo non-ASCII bytes from the ASS content/path.
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg caption burn-in failed: {result.stderr[-2000:]}")
 

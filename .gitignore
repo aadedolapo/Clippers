@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 backend/.env
 backend/downloads/
+backend/data/
+backend/assets/
 output/
 *.aiff
 .claude/
