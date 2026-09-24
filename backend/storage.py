@@ -8,6 +8,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime
 from typing import Optional
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -62,6 +63,14 @@ def load_sessions() -> list[dict]:
     with _LOCK:
         data = _read()
     return sorted(data.values(), key=lambda s: s["saved_at"], reverse=True)
+
+
+def load_sessions_for_date(date_str: str) -> list[dict]:
+    """Sessions whose saved_at falls on the given local calendar date
+    (YYYY-MM-DD) — the daily shortlist's candidate pool (retention upgrade
+    plan phase 4). Uses the machine's local timezone, matching a single-user
+    localhost tool's "today" rather than UTC's."""
+    return [s for s in load_sessions() if datetime.fromtimestamp(s["saved_at"]).date().isoformat() == date_str]
 
 
 def _read() -> dict:

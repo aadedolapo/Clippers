@@ -262,6 +262,52 @@
     gap: 12px;
   }
   .session-send-bar span { color: var(--muted); font-size: 13px; }
+
+  .shortlist-panel {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 24px;
+    background: rgba(110, 168, 254, 0.04);
+  }
+  .shortlist-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .shortlist-header h2 { font-size: 16px; margin: 0; flex: 1; }
+  .shortlist-header input[type=date] {
+    padding: 8px 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .shortlist-picks { display: flex; flex-direction: column; gap: 10px; }
+  .shortlist-pick {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .shortlist-pick-meta { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .shortlist-pick-lane {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 700;
+    color: var(--accent);
+    background: rgba(110, 168, 254, 0.12);
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+  .shortlist-pick-score { font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .shortlist-pick-video { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .shortlist-pick-hook { font-weight: 600; margin-bottom: 4px; }
+  .shortlist-pick-firstline { color: var(--muted); font-size: 13px; font-style: italic; margin-bottom: 10px; }
+  .shortlist-send-btn {
+    padding: 6px 14px;
+    font-size: 13px;
+  }
+  .shortlist-send-result { margin-left: 10px; font-size: 12px; }
+  .shortlist-empty { color: var(--muted); font-size: 14px; }
 </style>
 </head>
 <body>
@@ -271,6 +317,15 @@
 </header>
 
 <main>
+  <div class="shortlist-panel">
+    <div class="shortlist-header">
+      <h2>Today's picks</h2>
+      <input type="date" id="shortlist-date" />
+      <button type="button" id="shortlist-refresh" class="secondary">Refresh</button>
+    </div>
+    <div id="shortlist-picks" class="shortlist-picks"></div>
+  </div>
+
   <div class="row">
     <input type="file" id="local-file-input" accept="video/*" multiple />
     <input type="text" id="local-title-input" placeholder="Title (optional, single file only)" style="flex: 0 0 220px;" />
@@ -705,7 +760,94 @@ function analyze() {
   localSourceInput.value = "";
 }
 
+// "Today's picks" (retention upgrade plan phase 4): the day's actual best
+// 1-2 clips ranked across every video analyzed that day, not a per-video
+// top N — reusing the same /send-to-resolve endpoint each session's own
+// send button uses.
+const shortlistDateInput = document.getElementById("shortlist-date");
+const shortlistRefreshBtn = document.getElementById("shortlist-refresh");
+const shortlistPicksEl = document.getElementById("shortlist-picks");
+
+function todayLocalDateStr() {
+  const d = new Date();
+  const tzOffsetMs = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 10);
+}
+
+function renderShortlist(data) {
+  if (!data.picks || data.picks.length === 0) {
+    shortlistPicksEl.innerHTML = `<div class="shortlist-empty">No picks yet for this date — analyze some videos first.</div>`;
+    return;
+  }
+  shortlistPicksEl.innerHTML = data.picks
+    .map((c) => {
+      const sc = c.scorecard || {};
+      return `
+        <div class="shortlist-pick" data-video-id="${escapeHtml(c.video_id)}" data-start="${c.start}" data-end="${c.end}">
+          <div class="shortlist-pick-meta">
+            <span class="shortlist-pick-lane">${escapeHtml(sc.lane || "other")}</span>
+            <span class="shortlist-pick-score">${(c.score * 10).toFixed(1)}/10</span>
+            <span class="shortlist-pick-video">${escapeHtml(c.title)} · ${fmtTime(c.start)}–${fmtTime(c.end)} (${c.duration}s)</span>
+          </div>
+          <div class="shortlist-pick-hook">${escapeHtml(c.hook || "")}</div>
+          <div class="shortlist-pick-firstline">"${escapeHtml(sc.hook_first_line || "")}"</div>
+          <button type="button" class="shortlist-send-btn">Send to Resolve</button>
+          <span class="shortlist-send-result"></span>
+        </div>`;
+    })
+    .join("");
+
+  shortlistPicksEl.querySelectorAll(".shortlist-send-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const pickEl = btn.closest(".shortlist-pick");
+      const resultEl = pickEl.querySelector(".shortlist-send-result");
+      const video_id = pickEl.dataset.videoId;
+      const start = Number(pickEl.dataset.start);
+      const end = Number(pickEl.dataset.end);
+
+      btn.disabled = true;
+      btn.textContent = "Sending…";
+      resultEl.textContent = "";
+      try {
+        const res = await fetch("/send-to-resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ video_id, clips: [{ start, end }] }),
+        });
+        if (!res.ok) throw new Error(`send-to-resolve failed (${res.status})`);
+        const { results } = await res.json();
+        const r = results[0];
+        resultEl.style.color = r.success ? "var(--good)" : "var(--bad)";
+        resultEl.textContent = r.success ? "Sent to Resolve" : `Failed: ${r.error}`;
+      } catch (e) {
+        resultEl.style.color = "var(--bad)";
+        resultEl.textContent = e.message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Send to Resolve";
+      }
+    });
+  });
+}
+
+async function loadShortlist() {
+  const date = shortlistDateInput.value || todayLocalDateStr();
+  shortlistPicksEl.innerHTML = `<div class="shortlist-empty">Loading…</div>`;
+  try {
+    const res = await fetch(`/shortlist?date=${encodeURIComponent(date)}&n=2`);
+    if (!res.ok) throw new Error(`shortlist request failed (${res.status})`);
+    renderShortlist(await res.json());
+  } catch (e) {
+    shortlistPicksEl.innerHTML = `<div class="shortlist-empty" style="color: var(--bad);">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+shortlistDateInput.value = todayLocalDateStr();
+shortlistRefreshBtn.addEventListener("click", loadShortlist);
+shortlistDateInput.addEventListener("change", loadShortlist);
+
 loadSavedSessions();
+loadShortlist();
 
 analyzeBtn.addEventListener("click", analyze);
 </script>

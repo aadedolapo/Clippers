@@ -131,7 +131,9 @@ def _run_analysis(
         segments = transcribe(filepath)
 
         _set_job(job_id, status="scoring", segments=segments)
-        clips, rejected = score_video(segments, filepath, top_n=5)
+        # 8 per video (up from 5) so the daily shortlist pool spans 15-25
+        # candidates across a normal day's 3-4 source videos.
+        clips, rejected = score_video(segments, filepath, top_n=8)
 
         _set_job(job_id, status="done", clips=clips, rejected=rejected)
         # Persist hook/title/description (and timing) to disk immediately so
@@ -198,6 +200,58 @@ def saved_clips():
     """All previously analyzed sessions' hook/title/description data, so the
     frontend can restore them after a browser refresh."""
     return {"sessions": storage.load_sessions()}
+
+
+def _clip_key(c: dict) -> tuple:
+    return (c["video_id"], c["start"], c["end"])
+
+
+@app.get("/shortlist")
+def shortlist(date: str, n: int = 2):
+    """Retention upgrade plan phase 4: rank every clip saved from `date`'s
+    sessions (across all videos analyzed that day) by combined score, and
+    surface only the day's actual best 1-2 picks instead of a per-video top
+    N — the new operating model is "create lots of candidates, post very
+    few." Every persisted clip already passed the hook check (scoring.py
+    never lets a hook_pass=false clip reach storage), so no further
+    filtering is needed there.
+
+    Diversity: at most one pick per lane in the top `n`, so a single strong
+    video can't monopolize the day's picks — falls back to filling
+    remaining slots by score alone if there aren't `n` distinct lanes
+    available. `backups` is the next 5 candidates that didn't make the cut."""
+    sessions = storage.load_sessions_for_date(date)
+    pool = [
+        {**c, "video_id": s["video_id"], "title": s["title"]}
+        for s in sessions
+        for c in s["clips"]
+    ]
+    pool.sort(key=lambda c: c["score"], reverse=True)
+
+    picks: list[dict] = []
+    used_lanes: set = set()
+    picked_keys: set = set()
+    for c in pool:
+        if len(picks) >= n:
+            break
+        lane = c.get("scorecard", {}).get("lane", "other")
+        if lane in used_lanes:
+            continue
+        picks.append(c)
+        used_lanes.add(lane)
+        picked_keys.add(_clip_key(c))
+
+    if len(picks) < n:
+        for c in pool:
+            if len(picks) >= n:
+                break
+            if _clip_key(c) in picked_keys:
+                continue
+            picks.append(c)
+            picked_keys.add(_clip_key(c))
+
+    backups = [c for c in pool if _clip_key(c) not in picked_keys][:5]
+    return {"date": date, "picks": picks, "backups": backups}
 
 
 @app.post("/copyright-status/{video_id}")
