@@ -538,6 +538,7 @@ def render_minimal_faith_clip(
     music_path: Optional[str] = None,
     whoosh_path: Optional[str] = None,
     riser_path: Optional[str] = None,
+    add_captions: bool = True,
 ) -> str:
     """Render the "minimal-faith" deliverable: generate_minimal_faith_ass's
     captions plus the edit effects from the prototype — a zoom-out opener,
@@ -550,19 +551,16 @@ def render_minimal_faith_clip(
     music_path/whoosh_path/riser_path are None to skip that layer entirely
     — callers (main.py) resolve these via music.pick_track()/
     sfx.pick_whoosh()/sfx.pick_riser() before calling, so this function
-    itself has no opinion on selection, only mixing."""
+    itself has no opinion on selection, only mixing.
+
+    add_captions=False skips the karaoke captions, keeping the zoom/grade/
+    music/SFX bundle — for callers who'll add their own subtitle template by
+    hand in Resolve instead."""
     os.makedirs(output_dir, exist_ok=True)
     duration = end - start
 
     tag = clip_tag(filepath, start, end, MINIMAL_FAITH_PRESET)
-    ass_path = os.path.join(output_dir, f"{tag}.ass")
-    out_path = os.path.join(output_dir, f"{tag}_captioned.mp4")
-
-    ass_content = generate_minimal_faith_ass(segments, start, end, emphasis_words)
-    with open(ass_path, "w", encoding="utf-8") as f:
-        f.write(ass_content)
-    escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    escaped_fonts_dir = FONTS_DIR.replace(":", "\\:")
+    out_path = os.path.join(output_dir, f"{tag}_captioned.mp4" if add_captions else f"{tag}.mp4")
 
     vf = ["crop=ih*9/16:ih:(iw-ih*9/16)/2:0", f"scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}:flags=lanczos"]
     if zoom_opener:
@@ -574,7 +572,14 @@ def render_minimal_faith_clip(
         )
     if bw_grade:
         vf.append("hue=s=0,eq=contrast=1.08")
-    vf.append(f"ass={escaped_ass_path}:fontsdir={escaped_fonts_dir}")
+    if add_captions:
+        ass_path = os.path.join(output_dir, f"{tag}.ass")
+        ass_content = generate_minimal_faith_ass(segments, start, end, emphasis_words)
+        with open(ass_path, "w", encoding="utf-8") as f:
+            f.write(ass_content)
+        escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        escaped_fonts_dir = FONTS_DIR.replace(":", "\\:")
+        vf.append(f"ass={escaped_ass_path}:fontsdir={escaped_fonts_dir}")
 
     inputs = ["-ss", str(start), "-t", str(duration), "-i", filepath]
     filter_complex = [f"[0:v]{','.join(vf)}[v]"]
@@ -667,6 +672,7 @@ def burn_captions(
     output_dir: str = OUTPUT_DIR,
     pinned_line: Optional[str] = None,
     pinned_line_emphasis: Optional[list[str]] = None,
+    add_captions: bool = True,
 ) -> str:
     """Trim [start, end) from filepath, burn word-by-word ASS captions, write
     to output_dir. Center-crops the landscape source to fill the 9:16
@@ -678,41 +684,49 @@ def burn_captions(
     pinned at the top of frame for the whole duration, emphasis keywords in
     red — rendered as a second chained `ass=` filter stage so it burns in
     alongside the bottom karaoke captions in the same ffmpeg pass.
+
+    add_captions=False skips both the karaoke captions and pinned_line
+    entirely, producing just the reframed clip — for callers who'll add
+    their own subtitle template by hand in Resolve instead.
     """
     os.makedirs(output_dir, exist_ok=True)
 
     tag = clip_tag(filepath, start, end, preset_name)
-    ass_path = os.path.join(output_dir, f"{tag}.ass")
-    out_path = os.path.join(output_dir, f"{tag}_captioned.mp4")
-
-    ass_content = generate_ass(segments, start, end, emphasis_words, preset_name)
-    with open(ass_path, "w", encoding="utf-8") as f:
-        f.write(ass_content)
+    out_path = os.path.join(output_dir, f"{tag}_captioned.mp4" if add_captions else f"{tag}.mp4")
 
     duration = end - start
-    # ass_path may contain characters ffmpeg's filtergraph parser treats specially;
-    # escape for use inside the -vf/-filter_complex ass=... argument.
-    escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-
-    ass_filters = f"ass={escaped_ass_path}"
-    if pinned_line:
-        pinned_ass_path = os.path.join(output_dir, f"{tag}_pinned.ass")
-        pinned_ass_content = generate_static_overlay_ass(pinned_line, pinned_line_emphasis or [], duration)
-        with open(pinned_ass_path, "w", encoding="utf-8") as f:
-            f.write(pinned_ass_content)
-        escaped_pinned_ass_path = pinned_ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-        # Chaining a second `ass=` stage burns it in on top of whatever the
-        # first stage already rendered — the two files use disjoint screen
-        # regions (top-pinned vs. bottom karaoke) so there's no visual
-        # conflict, and this avoids merging two style blocks into one file.
-        ass_filters += f",ass={escaped_pinned_ass_path}"
-
     # Center-crop landscape source to 9:16 (discards left/right, keeps full
     # height), then scale to the portrait delivery resolution before burning
     # captions.
     crop = "crop=ih*9/16:ih:(iw-ih*9/16)/2:0"
     scale = f"scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}"
-    vf = f"{crop},{scale},{ass_filters}"
+
+    if not add_captions:
+        vf = f"{crop},{scale}"
+    else:
+        ass_path = os.path.join(output_dir, f"{tag}.ass")
+        ass_content = generate_ass(segments, start, end, emphasis_words, preset_name)
+        with open(ass_path, "w", encoding="utf-8") as f:
+            f.write(ass_content)
+
+        # ass_path may contain characters ffmpeg's filtergraph parser treats specially;
+        # escape for use inside the -vf/-filter_complex ass=... argument.
+        escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+        ass_filters = f"ass={escaped_ass_path}"
+        if pinned_line:
+            pinned_ass_path = os.path.join(output_dir, f"{tag}_pinned.ass")
+            pinned_ass_content = generate_static_overlay_ass(pinned_line, pinned_line_emphasis or [], duration)
+            with open(pinned_ass_path, "w", encoding="utf-8") as f:
+                f.write(pinned_ass_content)
+            escaped_pinned_ass_path = pinned_ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+            # Chaining a second `ass=` stage burns it in on top of whatever the
+            # first stage already rendered — the two files use disjoint screen
+            # regions (top-pinned vs. bottom karaoke) so there's no visual
+            # conflict, and this avoids merging two style blocks into one file.
+            ass_filters += f",ass={escaped_pinned_ass_path}"
+
+        vf = f"{crop},{scale},{ass_filters}"
 
     cmd = [
         "ffmpeg", "-y",

@@ -85,6 +85,10 @@ class ClipSelection(BaseModel):
     bw_grade: bool = False
     music_bed: bool = False
     music_mood: Literal["slow", "cinematic"] = "slow"
+    # Off by default: captions are now added by hand in Resolve (dragging a
+    # title template onto the timeline) rather than burned in here. The
+    # zoom/grade/music/SFX bundle still renders regardless of this flag.
+    add_captions: bool = False
 
 
 class SendToResolveRequest(BaseModel):
@@ -449,6 +453,7 @@ def send_to_resolve(req: SendToResolveRequest):
                     bw_grade=clip.bw_grade,
                     music_path=music_path,
                     whoosh_path=whoosh_path,
+                    add_captions=clip.add_captions,
                 )
             elif matched is not None and cold_open:
                 body_path = commentary_render.build_clip_with_cold_open(
@@ -461,6 +466,7 @@ def send_to_resolve(req: SendToResolveRequest):
                     pinned_line=pinned_line,
                     pinned_line_emphasis=pinned_line_emphasis,
                     preset_name=clip.caption_preset,
+                    add_captions=clip.add_captions,
                 )
             elif matched is not None:
                 body_path = captions.burn_captions(
@@ -472,6 +478,7 @@ def send_to_resolve(req: SendToResolveRequest):
                     pinned_line=pinned_line,
                     pinned_line_emphasis=pinned_line_emphasis,
                     preset_name=clip.caption_preset,
+                    add_captions=clip.add_captions,
                 )
             else:
                 body_path = None

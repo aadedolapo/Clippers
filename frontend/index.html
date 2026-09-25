@@ -604,6 +604,7 @@ function createSession(name, insertAt) {
                 <option value="minimal">Minimal (karaoke)</option>
               </select>
             </label>
+            <label class="clip-style-checkbox"><input type="checkbox" class="clip-add-captions-checkbox" /> Add captions</label>
             <label class="clip-style-checkbox"><input type="checkbox" class="clip-zoom-opener-checkbox" checked /> Zoom-out opener</label>
             <label class="clip-style-checkbox"><input type="checkbox" class="clip-bw-grade-checkbox" /> B&amp;W grade</label>
             <label class="clip-style-checkbox"><input type="checkbox" class="clip-music-bed-checkbox" /> Music bed</label>
@@ -817,13 +818,14 @@ function createSession(name, insertAt) {
       const use_cold_open = coldOpenCheckbox ? coldOpenCheckbox.checked : true;
       const with_commentary = clipEl.querySelector(".clip-commentary-checkbox").checked;
       const caption_preset = clipEl.querySelector(".clip-caption-preset").value;
+      const add_captions = clipEl.querySelector(".clip-add-captions-checkbox").checked;
       const zoom_opener = clipEl.querySelector(".clip-zoom-opener-checkbox").checked;
       const bw_grade = clipEl.querySelector(".clip-bw-grade-checkbox").checked;
       const music_bed = clipEl.querySelector(".clip-music-bed-checkbox").checked;
       const music_mood = clipEl.querySelector(".clip-music-mood").value;
       return {
         start: clip.start, end: clip.end, broll, use_cold_open, with_commentary,
-        caption_preset, zoom_opener, bw_grade, music_bed, music_mood,
+        caption_preset, add_captions, zoom_opener, bw_grade, music_bed, music_mood,
       };
     });
 
