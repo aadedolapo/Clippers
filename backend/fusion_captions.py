@@ -17,7 +17,45 @@ isn't documented anywhere in this Resolve install - every mechanism below
 connection) was verified empirically against the live running Fusion
 instance during Step 5 of the style-test run, not assumed from memory.
 
+STATUS as of the style-test run: video content and portrait framing are
+confirmed working end to end (MediaIn1/MediaOut1 wiring, 9:16 fill-zoom,
+Smart Reframe - verified against a real screenshot of the rendered
+timeline). Caption text is NOT yet reliable - see "Known gap: caption
+timing/positioning" below, found via that same screenshot and not yet
+resolved. Ship the ffmpeg/ASS minimal-faith path (backend/captions.py) for
+production use; treat this module as experimental until that gap is
+closed.
+
 Known gaps, found and reported rather than worked around:
+
+- **Caption timing/positioning breaks after ImportFusionComp (unresolved,
+  the significant one).** Built and verified correct in isolation (a
+  scratch fusion.NewComp() saved and re-read back showed exactly the
+  intended per-phrase frame ranges and Center positions), but a screenshot
+  of the actual rendered timeline after attaching the comp to a real clip
+  showed captions as garbled, overlapping bands in the wrong vertical
+  position - i.e. many phrases visible simultaneously instead of one at a
+  time. Root-caused as far as time allowed to two compounding causes:
+    1. A filter tool's own `Blend` input (tried first, on the Blur tool)
+       mixes its processed output against its OWN input, not scene
+       opacity - setting it to 0 does not hide the layer at all. Moved the
+       fade/hide keyframing to the phrase's own Merge node's `Blend`
+       instead (true compositing opacity) - this part is fixed and
+       verified correct in the scratch comp.
+    2. Fusion's Center coordinate Y-axis is bottom-up (0=bottom, 1=top),
+       opposite the ASS/screen convention _MINIMAL_FAITH_ANIMS was ported
+       from - fixed by inverting the Y values (see _REST_Y).
+    3. **Still unexplained**: re-reading the comp's own tool attributes
+       live *after* ImportFusionComp attached it to the real clip showed
+       TOOLNT_Region_Start/End values (e.g. {1: -72201.0}) that don't match
+       anything set during comp construction (small values like 5, 21, 39
+       - the phrase frame numbers). This suggests Resolve rebases the
+       comp's frame references against some other absolute frame context
+       (possibly the source media's own frame position) when attaching it
+       to a real timeline item, in a way that isn't apparent from the
+       scripting README or from testing against a detached scratch comp.
+       This wasn't reverse-engineered further - flagging it for whoever
+       picks this back up rather than guessing again.
 - Keyframes created via `tool.Input[frame] = value` always serialize with
   Flags={Linear=true}. No working method to switch a keyframe to Bezier/
   ease-out from script was found (SetKeyFrameFlags exists as an attribute
@@ -127,26 +165,55 @@ def _keyframe(comp, tool, input_name: str, keyframes: dict) -> None:
         inp[frame] = value
 
 
+# Resting vertical position, converted from the ASS/ffmpeg path's
+# POS_Y=1440 out of a 1920-tall frame (75% down from the TOP) into
+# Fusion's Center coordinate convention, which is bottom-up (Y=0 at the
+# bottom, Y=1 at the top) - confirmed live: using 0.75 directly (assuming
+# top-down, like ASS/screen coordinates) put captions near the TOP of
+# frame instead of the lower third, and rendered as two overlapping bands
+# because of the separate Merge-opacity bug below.
+_REST_Y = 1.0 - (captions.MINIMAL_FAITH_POS_Y / captions.PORTRAIT_HEIGHT)
+_RISE_Y = 45.0 / captions.PORTRAIT_HEIGHT  # the "blur_slide_up" 45px rise, as a fraction of frame height
+_SLIDE_X = 35.0 / captions.PORTRAIT_WIDTH  # the "slide_right" 35px shift, as a fraction of frame width
+
+
 def _build_phrase_layer(comp, entry: dict, fps: float):
-    """One TextPlus -> Transform -> Blur chain for a single phrase,
-    enabled only for its own frame range, keyframed with the same
-    entrance-animation values as captions.py's _MINIMAL_FAITH_ANIMS
-    (linear interpolation only - see module docstring)."""
+    """One TextPlus -> Transform -> Blur chain for a single phrase's visual
+    content, keyframed with the same entrance-animation values as
+    captions.py's _MINIMAL_FAITH_ANIMS (linear interpolation only - see
+    module docstring). Does NOT set opacity/visibility - that's the calling
+    Merge node's job (see build_comp_for_clip), since a filter tool's own
+    Blend input mixes its processed output against its OWN input, not
+    scene opacity, and setting it to 0 does not hide the layer (confirmed
+    live: this was the actual cause of every phrase rendering visible for
+    the whole clip simultaneously, not just the ones gated by
+    TOOLNT_Region_Start/End)."""
     anim = entry["anim"]
     ms = _ANIM_MS[anim]
     dur_frames = _ms_frames(ms["duration"], fps)
-    fade_in_frames = _ms_frames(ms["fade_in"], fps)
-    fade_out_frames = _ms_frames(_FADE_OUT_MS, fps)
     s0, s1 = entry["start_frame"], entry["end_frame"]
 
     text_tool = comp.AddTool("TextPlus")
     text_tool.StyledText = entry["text"]
     text_tool.Font = captions.MINIMAL_FAITH_BODY_FONT
+    # TextPlus defaults to a 1920x1080 LANDSCAPE canvas regardless of the
+    # timeline it ends up on (confirmed live) - without this, its Center/
+    # Size values (already 0-1 relative, correct in principle) render
+    # against the wrong aspect ratio entirely, which is what made captions
+    # land scattered across the frame instead of centered lower-third on
+    # the actual 1080x1920 portrait timeline.
+    text_tool.Width = captions.PORTRAIT_WIDTH
+    text_tool.Height = captions.PORTRAIT_HEIGHT
     text_tool.SetAttrs({"TOOLNT_Region_Start": s0, "TOOLNT_Region_End": s1})
 
     transform = comp.AddTool("Transform")
     transform.Input = text_tool
     transform.SetAttrs({"TOOLNT_Region_Start": s0, "TOOLNT_Region_End": s1})
+    # Static resting position for every anim type (only "up" has no
+    # additional Center keyframing below, so this is its only position -
+    # previously unset, which left it at Transform's own default (0.5,
+    # 0.5) dead center rather than the intended lower-third).
+    transform.Center = {1: 0.5, 2: _REST_Y}
 
     blur = comp.AddTool("Blur")
     blur.Input = transform
@@ -155,19 +222,18 @@ def _build_phrase_layer(comp, entry: dict, fps: float):
     if anim == "up":
         _keyframe(comp, transform, "Size", {s0: 0.7, s0 + dur_frames: 1.0})
     elif anim == "blur_slide_up":
-        _keyframe(comp, transform, "Center", {s0: {1: 0.5, 2: 0.75}, s0 + dur_frames: {1: 0.5, 2: 0.72}})
+        _keyframe(comp, transform, "Center", {
+            s0: {1: 0.5, 2: _REST_Y - _RISE_Y}, s0 + dur_frames: {1: 0.5, 2: _REST_Y},
+        })
         _keyframe(comp, blur, "XBlurSize", {s0: 10.0, s0 + dur_frames: 0.0})
         _keyframe(comp, blur, "YBlurSize", {s0: 10.0, s0 + dur_frames: 0.0})
     elif anim == "slide_right":
-        _keyframe(comp, transform, "Center", {s0: {1: 0.47, 2: 0.72}, s0 + dur_frames: {1: 0.5, 2: 0.72}})
+        _keyframe(comp, transform, "Center", {
+            s0: {1: 0.5 - _SLIDE_X, 2: _REST_Y}, s0 + dur_frames: {1: 0.5, 2: _REST_Y},
+        })
         _keyframe(comp, blur, "XBlurSize", {s0: 4.0, s0 + dur_frames: 0.6})
         _keyframe(comp, blur, "YBlurSize", {s0: 4.0, s0 + dur_frames: 0.6})
 
-    # Opacity fade in/out via the Blur tool's Blend input (0->1 in, 1->0 out).
-    _keyframe(comp, blur, "Blend", {
-        s0: 0.0, s0 + fade_in_frames: 1.0,
-        max(s0 + fade_in_frames, s1 - fade_out_frames): 1.0, s1: 0.0,
-    })
     return blur
 
 
@@ -175,25 +241,54 @@ def build_comp_for_clip(
     comp, segments: list[dict], start: float, end: float, emphasis_words: list[str], fps: float
 ) -> int:
     """Populate an empty Fusion comp (from fusion.NewComp()) with one
-    entrance-animated phrase layer per phrase, merged over a transparent
-    background. Returns the number of phrases built (0 means no words in
-    range - caller should skip attaching an empty comp)."""
+    entrance-animated phrase layer per phrase, merged over the incoming
+    clip's own video (MediaIn1) and wired to MediaOut1. Returns the number
+    of phrases built (0 means no words in range - caller should skip
+    attaching an empty comp).
+
+    MediaIn1/MediaOut1 are required, not optional: a comp attached to a
+    timeline item via ImportFusionComp entirely replaces that clip's node
+    graph, and Resolve composites the clip using whatever feeds MediaOut1
+    (with MediaIn1 as the clip's own image) - found by inspecting a
+    real Resolve-created comp live, since neither name appears anywhere in
+    the scripting README. A comp built without them (the first version of
+    this function) imports without error but renders nothing: no crash, no
+    warning, just a blank clip, which is exactly what happened on the
+    first --demo run before this fix."""
     plan = build_phrase_plan(segments, start, end, emphasis_words, fps)
     if not plan:
         return 0
 
-    background = comp.AddTool("Background")
-    background.TransparentBackground = 1
-    composite = background
+    media_in = comp.AddTool("MediaIn")  # auto-named "MediaIn1"
+    composite = media_in
 
     for entry in plan:
+        ms = _ANIM_MS[entry["anim"]]
+        fade_in_frames = _ms_frames(ms["fade_in"], fps)
+        fade_out_frames = _ms_frames(_FADE_OUT_MS, fps)
+        s0, s1 = entry["start_frame"], entry["end_frame"]
+
         layer = _build_phrase_layer(comp, entry, fps)
         merge = comp.AddTool("Merge")
         merge.Background = composite
         merge.Foreground = layer
+        # Real opacity/visibility control lives here, on the Merge that
+        # actually composites this phrase over everything under it - a
+        # filter's own Blend (tried first, on the Blur tool) only mixes
+        # its processed output against its own input, not scene opacity,
+        # so it never actually hid anything; every phrase rendered visible
+        # for the whole clip until this was moved here (confirmed live).
+        # Keyframe curves hold their boundary value outside the defined
+        # range, so this is 0 before s0 and after s1 without needing extra
+        # keyframes there.
+        _keyframe(comp, merge, "Blend", {
+            s0: 0.0, s0 + fade_in_frames: 1.0,
+            max(s0 + fade_in_frames, s1 - fade_out_frames): 1.0, s1: 0.0,
+        })
         composite = merge
 
-    composite.SetAttrs({"TOOLS_Name": "WMCaptionsOutput"})
+    media_out = comp.AddTool("MediaOut")  # auto-named "MediaOut1"
+    media_out.Input = composite
     return len(plan)
 
 
@@ -246,6 +341,27 @@ def insert_phrase_titles_fallback(timeline, plan: list[dict], clip_start_frame: 
             continue
         inserted += 1
     return {"inserted": inserted, "failed": failed}
+
+
+def _find_or_import_media(media_pool, filepath: str):
+    """resolve_integration._import_media's cache is per-process, so a
+    fresh standalone script run (like --demo) doesn't know a file already
+    sits in the media pool from an earlier run of this same script.
+    Confirmed live while debugging this demo: re-importing a clip that's
+    already present AND has since had a Fusion comp attached to it returns
+    None (not an error, not an empty list) rather than the existing item -
+    resolve_integration._import_media's `if not items or items[0] is None`
+    check catches this and raises, which is correct for a genuinely failed
+    import but wrong here, where the media is already there. Search the
+    media pool by path first rather than assuming import is always safe to
+    retry."""
+    target = os.path.abspath(filepath)
+    for item in media_pool.GetRootFolder().GetClipList():
+        prop = item.GetClipProperty("File Path")
+        if prop and os.path.abspath(prop) == target:
+            ri._media_pool_item_cache[filepath] = item
+            return item
+    return ri._import_media(media_pool, filepath)
 
 
 def _frames_to_timecode(frame: int, fps: int = 24) -> str:
@@ -308,17 +424,32 @@ def _run_demo() -> None:
     timeline = ri._find_existing_timeline(project, DEMO_TIMELINE_NAME)
     if timeline is None:
         timeline = media_pool.CreateEmptyTimeline(DEMO_TIMELINE_NAME)
+        # Only force portrait on a timeline we just created (matches
+        # resolve_integration._get_or_create_timeline's own convention) -
+        # this demo's earlier runs skipped this entirely, leaving the
+        # timeline at whatever the project's default (16:9) is.
+        timeline.SetSetting("useCustomSettings", "1")
+        timeline.SetSetting("timelineResolutionWidth", str(captions.PORTRAIT_WIDTH))
+        timeline.SetSetting("timelineResolutionHeight", str(captions.PORTRAIT_HEIGHT))
     project.SetCurrentTimeline(timeline)
 
-    media_pool_item = ri._import_media(media_pool, DEMO_SOURCE)
-    start_frame = round(start * fps)
-    end_frame = max(start_frame, round(end * fps) - 1)
-    result = media_pool.AppendToTimeline([{
-        "mediaPoolItem": media_pool_item, "startFrame": start_frame, "endFrame": end_frame,
-    }])
-    if not result or result[0] is None:
-        raise RuntimeError("Failed to append demo clip to timeline")
-    main_item = result[0]
+    media_pool_item = _find_or_import_media(media_pool, DEMO_SOURCE)
+    # startFrame/endFrame are SOURCE MEDIA frame numbers, not timeline
+    # frames - they must use the clip's own native fps, not the project's
+    # timeline fps (matching resolve_integration.py's established
+    # convention). This source file is 29.97fps while this project's
+    # timeline is 24fps; using `fps` (24) here silently produced a clip
+    # ~20% shorter than intended on an earlier run of this demo.
+    fps_prop = media_pool_item.GetClipProperty("FPS")
+    src_fps = ri._parse_fps(fps_prop) if fps_prop else fps
+    start_frame = round(start * src_fps)
+    end_frame = max(start_frame, round(end * src_fps) - 1)
+    # _append_clip (not a raw AppendToTimeline dict call) so the 16:9
+    # source gets zoomed to fill the 9:16 frame and Smart Reframed, same
+    # as every other clip this app sends to Resolve - skipping this step
+    # earlier is why the video showed up letterboxed/16:9 instead of
+    # filling the portrait frame.
+    main_item = ri._append_clip(media_pool, timeline, media_pool_item, start_frame, end_frame, framing="fill")
     print(f"Appended main clip: track 1, timeline frames {main_item.GetStart()}-{main_item.GetEnd()}")
 
     if timeline.GetTrackCount("video") < FUSION_CAPTION_TRACK:
@@ -336,17 +467,17 @@ def _run_demo() -> None:
         fallback_result = insert_phrase_titles_fallback(timeline, plan, main_item.GetStart())
         print(f"Fallback result: {fallback_result}")
 
-    # Music + whoosh on audio tracks 2-3, per the plan.
+    # Music + whoosh on audio tracks 2-3, per the plan. Reuses the main
+    # clip's own src_fps for the audio items' frame math too (same
+    # approach resolve_integration.py's B-roll insertion uses).
     music_path = music.pick_track("slow")
     whoosh_path = sfx.pick_whoosh()
-    fps_prop = media_pool_item.GetClipProperty("FPS")
-    src_fps = ri._parse_fps(fps_prop) if fps_prop else fps
     for path, track in ((music_path, FUSION_MUSIC_TRACK), (whoosh_path, FUSION_WHOOSH_TRACK)):
         if not path:
             continue
         while timeline.GetTrackCount("audio") < track:
             timeline.AddTrack("audio")
-        item = ri._import_media(media_pool, path)
+        item = _find_or_import_media(media_pool, path)
         dur_frames = round((end - start) * src_fps) if track == FUSION_MUSIC_TRACK else round(1.5 * src_fps)
         result = media_pool.AppendToTimeline([{
             "mediaPoolItem": item, "startFrame": 0, "endFrame": dur_frames,

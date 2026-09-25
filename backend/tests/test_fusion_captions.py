@@ -117,9 +117,12 @@ class TestCompGeneration(unittest.TestCase):
             self.assertEqual(content.count("TextPlus {"), n_phrases, "one TextPlus node per phrase")
             self.assertEqual(content.count("Transform {"), n_phrases, "one Transform node per phrase")
             self.assertEqual(content.count("Blur {"), n_phrases, "one Blur node per phrase")
-            # n_phrases Merges + 1 Background.
             self.assertEqual(content.count("Merge {"), n_phrases)
-            self.assertEqual(content.count("Background {"), 1)
+            # MediaIn1/MediaOut1 are required for Resolve to actually
+            # composite the clip's own video with the captions (see
+            # build_comp_for_clip's docstring) - not optional decoration.
+            self.assertEqual(content.count("MediaIn {"), 1)
+            self.assertEqual(content.count("MediaOut {"), 1)
 
             # Frame timings: every keyframe frame number written to the file
             # should fall within the clip's own duration in frames.
