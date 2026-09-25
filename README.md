@@ -56,7 +56,7 @@ ANTHROPIC_API_KEY=sk-ant-...
    - Creates (or reuses) a timeline named `Viral Clips - <title>`, set to 9:16 portrait
    - Appends the trimmed clip, zoomed to fill the portrait frame (no letterboxing)
    - Runs Resolve's AI Smart Reframe on it, so a moving speaker stays framed instead of sitting at a fixed crop (requires Resolve **Studio**; free Resolve still gets everything else)
-   - Renders a **separate, ready-to-post mp4** into `output/` — same portrait crop, with whichever edit effects you picked for that clip (zoom opener, B&W grade, music bed) applied (see **Caption styles** below)
+   - Renders a **separate, ready-to-post mp4** into `output/` — same portrait crop, with whichever edit effects you picked for that clip (zoom opener, B&W grade, music bed) applied (see **Clip style** below)
 6. **Switch to Resolve.** Your timeline is there, clips trimmed and reframed, ready to review, tighten, and export. Captions are *not* added automatically anywhere (not the timeline, not the `output/` mp4) — drag in your own animated subtitle template (Effects Library → Titles → Subtitles) once per timeline if you want native, editable captions there; it'll stick around for every clip you send to that timeline afterward.
 
 ## Daily workflow
@@ -70,21 +70,17 @@ The retention data behind this tool (see `RETENTION_UPGRADE_PLAN.md`) points at 
 5. **48h after posting**, click **Mark as posted** on the clip, paste the YouTube URL, and log stayed-to-watch % and views — or import a YouTube Studio CSV export (Content → Shorts → Export) weekly via the button next to Today's picks, which matches rows to already-posted clips automatically.
 6. **Every 2 weeks**, run `python backend/performance.py report` (avg stayed % by lane, duration, and cold-open use) and adjust the weights by hand in `backend/scoring.py`'s `WEIGHTS`. Once you have 10+ posted clips with stats, the scorer automatically starts feeding itself the best/worst-performing hooks as examples.
 
-## Caption styles
+## Clip style
 
-**Captions are off by default** — the expectation is you'll drag your own animated subtitle template onto the clip in Resolve by hand (Effects Library → Titles → Subtitles), so the burned-in captions below are opt-in via the **Add captions** checkbox next to the caption style dropdown.
+This tool no longer burns in any captions — that's on you now: drag your own animated subtitle template onto the clip in Resolve by hand (Effects Library → Titles → Subtitles) once you're in the timeline. The "Clip style" dropdown per clip picks which *edit-effects bundle* renders instead:
 
-Edit-effects toggles (independent of captions, always available):
-- **Zoom-out opener** (on by default) — scales in from 112% to 100% over the first ~1.7s, with a soft whoosh if one's configured (see **Music & SFX** below).
-- **B&W grade** (off by default) — a muted black-and-white look for the whole clip.
-- **Music bed** (off by default) — pick a mood, **slow** or **cinematic**; see below.
+- **Minimal Faith** (default) — zoom-out opener, optional B&W grade, and a music bed, but no cold open (its effects pipeline doesn't have a cold-open crossfade path built for it):
+  - **Zoom-out opener** (on by default) — scales in from 112% to 100% over the first ~1.7s, with a soft whoosh if one's configured (see **Music & SFX** below).
+  - **B&W grade** (off by default) — a muted black-and-white look for the whole clip.
+  - **Music bed** (off by default) — pick a mood, **slow** or **cinematic**; see below.
+- **Plain** — just the reframed clip, no zoom/grade/music bundle, but eligible for the cold-open toggle above it.
 
-If you check **Add captions**, pick a style from the dropdown first:
-
-- **`minimal-faith`** (default) — short animated phrases (2–4 words at a time, rotating entrance animations) instead of word-by-word karaoke: Montserrat ExtraBold body, Playfair Display Bold Italic yellow emphasis word.
-- `bold-white`, `yellow-pop`, `minimal` — the original word-by-word karaoke-highlight styles, still available if you prefer them.
-
-See `backend/captions.py` if you want to tweak fonts, colors, timings, or add your own preset.
+See `backend/captions.py` if you want to tweak fonts, colors, or timings for a template you build yourself, or resurrect burned-in captions (the karaoke rendering code is still there, just no longer wired into `/send-to-resolve`).
 
 ## Music & SFX
 
