@@ -455,17 +455,27 @@ def _run_demo() -> None:
     if timeline.GetTrackCount("video") < FUSION_CAPTION_TRACK:
         timeline.AddTrack("video")
 
-    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "output", "fusion_demo")
-    try:
-        fusion_comp = generate_and_attach(
-            main_item, segments, start, end, emphasis_words, output_dir, tag="wm_fusion_demo",
-        )
-        print(f"Comp generation + ImportFusionComp: {'OK' if fusion_comp else 'no phrases in range'}")
-    except Exception as e:
-        print(f"[warn] one-comp-per-clip path failed: {e}")
-        print("Falling back to per-phrase title insertion (untested path - see docstring)...")
-        fallback_result = insert_phrase_titles_fallback(timeline, plan, main_item.GetStart())
-        print(f"Fallback result: {fallback_result}")
+    if "--with-captions" in sys.argv:
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "output", "fusion_demo")
+        try:
+            fusion_comp = generate_and_attach(
+                main_item, segments, start, end, emphasis_words, output_dir, tag="wm_fusion_demo",
+            )
+            print(f"Comp generation + ImportFusionComp: {'OK' if fusion_comp else 'no phrases in range'}")
+        except Exception as e:
+            print(f"[warn] one-comp-per-clip path failed: {e}")
+            print("Falling back to per-phrase title insertion (untested path - see docstring)...")
+            fallback_result = insert_phrase_titles_fallback(timeline, plan, main_item.GetStart())
+            print(f"Fallback result: {fallback_result}")
+    else:
+        # Caption generation is known-broken (see module docstring: garbled
+        # overlapping text from an unresolved frame-rebasing issue on
+        # ImportFusionComp) - skip attaching it by default so re-running
+        # this demo for anything else (video framing, audio tracks) doesn't
+        # silently put broken captions back on the clip. Pass
+        # --with-captions to opt into the broken path for further
+        # debugging.
+        print("Skipping caption comp generation (known-broken - pass --with-captions to test it anyway).")
 
     # Music + whoosh on audio tracks 2-3, per the plan. Reuses the main
     # clip's own src_fps for the audio items' frame math too (same
@@ -493,4 +503,5 @@ if __name__ == "__main__":
     if "--demo" in sys.argv:
         _run_demo()
     else:
-        print("Usage: python fusion_captions.py --demo")
+        print("Usage: python fusion_captions.py --demo [--with-captions]")
+        print("  --with-captions: also attach the caption comp (known-broken, see module docstring)")

@@ -99,7 +99,9 @@ Both are opt-in per clip and skip silently if unconfigured — nothing breaks if
 
 ## Experimental: Fusion-native captions
 
-`backend/fusion_captions.py` (`python backend/fusion_captions.py --demo`) generates the `minimal-faith` captions as an **editable Fusion composition** on the Resolve timeline instead of a burned-in mp4, so you can tweak the animation by hand after sending. As of this writing it's **not reliable yet**: video content and 9:16 framing work, but caption timing/positioning breaks once the generated comp is attached to a real timeline clip, for reasons not yet fully root-caused (see the module's own docstring for what's confirmed vs. still open, and `docs/resolve_api_notes.md` / `docs/fusion_templates.md` for the underlying Fusion scripting notes and manual title-template build guide). Use the regular `minimal-faith` mp4 path for anything you actually intend to post.
+`backend/fusion_captions.py` generates the `minimal-faith` captions as an **editable Fusion composition** on the Resolve timeline instead of a burned-in mp4, so you can tweak the animation by hand after sending. As of this writing it's **not reliable yet**: video content and 9:16 framing work, but caption timing/positioning breaks once the generated comp is attached to a real timeline clip, for reasons not yet fully root-caused (see the module's own docstring for what's confirmed vs. still open, and `docs/resolve_api_notes.md` / `docs/fusion_templates.md` for the underlying Fusion scripting notes and manual title-template build guide). Use the regular `minimal-faith` mp4 path for anything you actually intend to post.
+
+`python backend/fusion_captions.py --demo` sends a test clip to a `WM Fusion Test` timeline (video + framing + music/SFX only) **without** attaching the broken captions, so it's safe to re-run for anything other than the captions themselves. Pass `--with-captions` to also attach the caption comp if you're picking up the debugging.
 
 ## Where things end up
 
