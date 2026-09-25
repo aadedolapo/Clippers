@@ -217,6 +217,28 @@
     cursor: pointer;
     width: fit-content;
   }
+  .clip-style-controls {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    background: rgba(110, 168, 254, 0.05);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px;
+  }
+  .clip-style-select-label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .clip-style-checkbox { display: flex; align-items: center; gap: 5px; color: var(--text); cursor: pointer; }
+  .clip-style-controls select {
+    padding: 4px 6px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+  }
   .clip-download-btn, .clip-broll-btn, .clip-mark-posted-btn {
     padding: 5px 12px;
     font-size: 12px;
@@ -572,6 +594,24 @@ function createSession(name, insertAt) {
             <input type="checkbox" class="clip-commentary-checkbox" />
             Add Wisement outro
           </label>
+          <div class="clip-style-controls">
+            <label class="clip-style-select-label">
+              Caption style
+              <select class="clip-caption-preset">
+                <option value="minimal-faith" selected>Minimal Faith</option>
+                <option value="bold-white">Bold White (karaoke)</option>
+                <option value="yellow-pop">Yellow Pop (karaoke)</option>
+                <option value="minimal">Minimal (karaoke)</option>
+              </select>
+            </label>
+            <label class="clip-style-checkbox"><input type="checkbox" class="clip-zoom-opener-checkbox" checked /> Zoom-out opener</label>
+            <label class="clip-style-checkbox"><input type="checkbox" class="clip-bw-grade-checkbox" /> B&amp;W grade</label>
+            <label class="clip-style-checkbox"><input type="checkbox" class="clip-music-bed-checkbox" /> Music bed</label>
+            <select class="clip-music-mood">
+              <option value="slow" selected>Slow</option>
+              <option value="cinematic">Cinematic</option>
+            </select>
+          </div>
           <div class="clip-fields">${fieldsHtml}</div>
           ${fieldsHtml ? '<button type="button" class="clip-download-btn">Download title/hook/desc</button>' : ""}
           <button type="button" class="clip-broll-btn">Suggest B-roll</button>
@@ -776,7 +816,15 @@ function createSession(name, insertAt) {
       const coldOpenCheckbox = clipEl.querySelector(".clip-coldopen-checkbox");
       const use_cold_open = coldOpenCheckbox ? coldOpenCheckbox.checked : true;
       const with_commentary = clipEl.querySelector(".clip-commentary-checkbox").checked;
-      return { start: clip.start, end: clip.end, broll, use_cold_open, with_commentary };
+      const caption_preset = clipEl.querySelector(".clip-caption-preset").value;
+      const zoom_opener = clipEl.querySelector(".clip-zoom-opener-checkbox").checked;
+      const bw_grade = clipEl.querySelector(".clip-bw-grade-checkbox").checked;
+      const music_bed = clipEl.querySelector(".clip-music-bed-checkbox").checked;
+      const music_mood = clipEl.querySelector(".clip-music-mood").value;
+      return {
+        start: clip.start, end: clip.end, broll, use_cold_open, with_commentary,
+        caption_preset, zoom_opener, bw_grade, music_bed, music_mood,
+      };
     });
 
     try {

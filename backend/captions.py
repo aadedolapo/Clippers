@@ -4,6 +4,7 @@ highlight captions, emphasis words visually distinct, swappable style presets.
 """
 
 import os
+import re
 import subprocess
 from typing import Optional
 
@@ -102,6 +103,52 @@ FIRST_CAPTION_DELAY = 0.05  # seconds; near-zero so text appears almost immediat
 PORTRAIT_WIDTH = 1080
 PORTRAIT_HEIGHT = 1920
 STYLE_REFERENCE_HEIGHT = 720
+
+# "Minimal Faith" style (retention upgrade plan phase 7): phrase-based
+# animated captions + edit effects, ported from the already-tested
+# prototype at _style_test/minimal_faith_test.py rather than reinvented —
+# see generate_minimal_faith_ass and render_minimal_faith_clip below. Not
+# a STYLE_PRESETS entry: it needs phrase grouping and entrance animations,
+# not per-word karaoke, so it gets its own generation path entirely.
+MINIMAL_FAITH_PRESET = "minimal-faith"
+FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts")
+
+MINIMAL_FAITH_BODY_FONT = "Montserrat ExtraBold"
+MINIMAL_FAITH_BODY_SIZE = 96
+MINIMAL_FAITH_EMPH_FONT = "Playfair Display"
+MINIMAL_FAITH_EMPH_SIZE = 122
+MINIMAL_FAITH_EMPH_COLOUR = "&H4DD8FF&"  # #FFD84D in ASS BGR
+MINIMAL_FAITH_POS_Y = 1440
+MINIMAL_FAITH_MAX_LINE_CHARS = 16
+
+MINIMAL_FAITH_ZOOM_FROM = 1.12
+MINIMAL_FAITH_ZOOM_SECS = 1.7
+MINIMAL_FAITH_VOICE_LUFS = -15
+# Confirmed via listening test during the style-test run (2026-09-25): the
+# prototype's original -33 (18 LU under the voice) read as too quiet; -28
+# (13 LU under) was confirmed as the right level.
+MINIMAL_FAITH_MUSIC_LUFS = -28
+MINIMAL_FAITH_MUSIC_OFFSET = 6.0
+MINIMAL_FAITH_WHOOSH_VOLUME = 0.35
+MINIMAL_FAITH_WHOOSH_MAX_SECS = 1.5
+MINIMAL_FAITH_RISER_VOLUME = 0.4
+
+# Words too generic to ever be the one highlighted word in a phrase, and a
+# signal (alongside punctuation/gaps) that a phrase can safely extend one
+# more word rather than breaking on a weak word. Ported verbatim from the
+# prototype.
+_STOP_WORDS = {"a", "an", "the", "to", "of", "and", "or", "in", "on", "that",
+               "you", "i", "it", "is", "be", "me", "do", "we", "they"}
+
+# ASS override-tag animations, ported verbatim from the prototype: "up" for
+# the phrase carrying the emphasis word, otherwise alternating
+# blur_slide_up/slide_right so consecutive plain phrases don't feel
+# repetitive.
+_MINIMAL_FAITH_ANIMS = {
+    "up": "{\\an5\\pos(540,%d)\\fscx70\\fscy70\\fad(100,60)\\t(0,180,0.5,\\fscx100\\fscy100)}" % MINIMAL_FAITH_POS_Y,
+    "blur_slide_up": "{\\an5\\move(540,%d,540,%d,0,200)\\blur10\\fad(120,60)\\t(0,200,0.5,\\blur0.6)}" % (MINIMAL_FAITH_POS_Y + 45, MINIMAL_FAITH_POS_Y),
+    "slide_right": "{\\an5\\move(505,%d,540,%d,0,220)\\blur4\\fad(110,60)\\t(0,220,0.5,\\blur0.6)}" % (MINIMAL_FAITH_POS_Y, MINIMAL_FAITH_POS_Y),
+}
 
 
 def _fmt_ass_time(seconds: float) -> str:
@@ -264,6 +311,336 @@ def generate_static_overlay_ass(
     ass = _build_ass_header(style)
     ass += f"Dialogue: 0,{_fmt_ass_time(0.0)},{_fmt_ass_time(duration)},Default,,0,0,0,,{text}\n"
     return ass
+
+
+def _build_minimal_faith_header() -> str:
+    # Not built via _build_ass_header: that function scales preset values
+    # against STYLE_REFERENCE_HEIGHT for the karaoke presets, but the
+    # minimal-faith values above are already tuned directly against the
+    # 1080x1920 canvas (matching the prototype), so scaling them again
+    # would blow up the sizing.
+    return f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {PORTRAIT_WIDTH}
+PlayResY: {PORTRAIT_HEIGHT}
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Body,{MINIMAL_FAITH_BODY_FONT},{MINIMAL_FAITH_BODY_SIZE},&H00FFFFFF,&H00FFFFFF,&H50000000,&H64000000,0,0,0,0,100,100,1,0,1,2.5,5,5,80,80,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+
+def _group_into_phrases(
+    words: list[dict],
+    emphasis_words: list[str],
+    max_words: int = 4,
+    max_dur: float = 1.4,
+    gap: float = 0.30,
+) -> list[list[dict]]:
+    """Port of the prototype's phrases(): group words into 2-4 word phrases,
+    breaking at punctuation (also treating a capitalised next word other
+    than "I" as an implied sentence start, since Whisper often drops full
+    stops), at gaps over `gap` seconds, or once a phrase would run past
+    `max_dur` seconds — but never splitting a multi-word emphasis phrase
+    (e.g. "horrible past") apart."""
+    emphasis_lower = [e.lower() for e in emphasis_words if " " in e]
+    out: list[list[dict]] = []
+    cur: list[dict] = []
+    for i, wd in enumerate(words):
+        cur.append(wd)
+        nxt = words[i + 1] if i + 1 < len(words) else None
+        w_text = wd["word"].strip()
+        nxt_text = nxt["word"].strip() if nxt else ""
+
+        punct = bool(w_text) and w_text[-1] in ".,!?;:"
+        if nxt and nxt_text[:1].isupper() and nxt_text != "I" and not nxt_text.startswith(("I ", "I'")):
+            punct = True
+
+        inside_emph = nxt is not None and any(
+            f"{w_text} {nxt_text}".lower().strip(".,!?").startswith(e) or e in f"{w_text} {nxt_text}".lower()
+            for e in emphasis_lower
+        )
+
+        brk = (
+            nxt is None
+            or punct
+            or len(cur) >= max_words
+            or (nxt["start"] - wd["end"]) > gap
+            or (wd["end"] - cur[0]["start"]) > max_dur
+        )
+        # Don't end a phrase on a weak word if it can extend by one instead.
+        if brk and nxt and not punct and len(cur) < max_words and w_text.lower() in _STOP_WORDS \
+                and len(cur) >= 2 and (nxt["start"] - wd["end"]) <= gap:
+            brk = len(cur) >= max_words + 1
+        if inside_emph and nxt is not None and len(cur) < max_words + 1:
+            brk = False
+
+        if brk and (len(cur) >= 2 or punct or nxt is None or (nxt["start"] - wd["end"]) > gap):
+            out.append(cur)
+            cur = []
+    if cur:
+        out.append(cur)
+    return _merge_short_phrases(out, max_words)
+
+
+def _merge_short_phrases(phrases: list[list[dict]], max_words: int) -> list[list[dict]]:
+    """The punctuation-forced break above bypasses the len(cur) >= 2 check
+    (by design, so a real sentence boundary still breaks immediately) —
+    but that means a short residual buffer immediately followed by a
+    capitalised word (common with back-to-back proper nouns, e.g. "...
+    Stanford and Berkeley. And I...") can strand a lone word as its own
+    phrase, and a run of several such words in a row (e.g. a rapid list of
+    names) can strand more than one. Unconditionally merge any phrase under
+    2 words into a neighbour — no cap on the resulting length — since an
+    occasional longer phrase is a far smaller visual problem than a single
+    word flashing on screen alone."""
+    merged = [list(p) for p in phrases]
+    i = 0
+    while i < len(merged):
+        if len(merged[i]) >= 2 or len(merged) == 1:
+            i += 1
+            continue
+        if i > 0:
+            merged[i - 1] = merged[i - 1] + merged[i]
+            merged.pop(i)
+            i -= 1
+        else:
+            merged[i + 1] = merged[i] + merged[i + 1]
+            merged.pop(i)
+    return merged
+
+
+def _phrase_emph_index(phrase: list[dict], emphasis_words: list[str]) -> Optional[int]:
+    """Index of the one word in `phrase` to visually highlight, or None if
+    nothing in it matches emphasis_words. Ported from the prototype's
+    emph_index()."""
+    tokens = {t.lower() for e in emphasis_words for t in e.split()}
+    best = None
+    for i, wd in enumerate(phrase):
+        clean = re.sub(r"[^\w']", "", wd["word"]).lower()
+        if clean in tokens and clean not in _STOP_WORDS and clean != "too":
+            best = i
+    return best
+
+
+def _wrap_phrase_words(phrase: list[dict], max_chars: int) -> list[list[dict]]:
+    """Split a phrase onto a second line only if its plain text would run
+    past max_chars — phrases are 2-4 words, so a simple word-count halving
+    is a fine approximation of proper line-breaking here."""
+    text_len = sum(len(w["word"].strip()) for w in phrase) + (len(phrase) - 1)
+    if text_len <= max_chars or len(phrase) < 2:
+        return [phrase]
+    split = (len(phrase) + 1) // 2
+    return [phrase[:split], phrase[split:]]
+
+
+def generate_minimal_faith_ass(
+    segments: list[dict],
+    start: float,
+    end: float,
+    emphasis_words: list[str],
+    capitalize_divine_pronouns: Optional[list[str]] = None,
+) -> str:
+    """Build ASS content for the "minimal-faith" style: short animated
+    phrases (2-4 words) instead of per-word karaoke, centered lower-middle,
+    with at most one highlighted word per phrase. Ported from
+    _style_test/minimal_faith_test.py's build_ass/phrases/emph_index, but
+    reading word timings directly from the Whisper segments already on hand
+    instead of re-parsing a karaoke .ass file.
+
+    capitalize_divine_pronouns: an optional list of already-decided literal
+    words (e.g. ["he", "his"]) to force-capitalize wherever they appear as a
+    standalone token. The mechanism is wired up here but nothing currently
+    populates this list — RETENTION_UPGRADE_PLAN.md phase 7's "reverence
+    rule" (capitalize He/Him/His when referring to God/Jesus) needs real
+    language understanding of what each pronoun refers to, not a text
+    heuristic, so deciding it was deliberately deferred rather than guessed
+    at the risk of mis-capitalizing an unrelated "he"."""
+    words = _segment_words_in_range(segments, start, end)
+    if not words:
+        return _build_minimal_faith_header()
+    if words[0]["start"] - start < FIRST_CAPTION_DELAY:
+        words[0] = {**words[0], "start": start + FIRST_CAPTION_DELAY}
+
+    phrases = _group_into_phrases(words, emphasis_words)
+    cap_set = {w.lower() for w in (capitalize_divine_pronouns or [])}
+
+    ass = _build_minimal_faith_header()
+    alt = 0
+    for i, phrase in enumerate(phrases):
+        p_start = max(0.0, phrase[0]["start"] - start)
+        natural_end = phrase[-1]["end"] - start + 0.25
+        next_start = (phrases[i + 1][0]["start"] - start) if i + 1 < len(phrases) else float("inf")
+        p_end = max(p_start, min(natural_end, next_start))
+
+        ei = _phrase_emph_index(phrase, emphasis_words)
+        if ei is not None:
+            anim = _MINIMAL_FAITH_ANIMS["up"]
+        else:
+            anim = _MINIMAL_FAITH_ANIMS["blur_slide_up" if alt % 2 == 0 else "slide_right"]
+            alt += 1
+
+        rendered_lines = []
+        idx = 0
+        for line_words in _wrap_phrase_words(phrase, MINIMAL_FAITH_MAX_LINE_CHARS):
+            parts = []
+            for wd in line_words:
+                w = wd["word"].strip()
+                bare = re.sub(r"[^\w']", "", w).lower()
+                if bare in cap_set and w[:1].islower():
+                    w = w[0].upper() + w[1:]
+                if idx == ei:
+                    parts.append(
+                        f"{{\\fn{MINIMAL_FAITH_EMPH_FONT}\\i1\\b1\\fs{MINIMAL_FAITH_EMPH_SIZE}"
+                        f"\\c{MINIMAL_FAITH_EMPH_COLOUR}}}{w}{{\\r}}\\h"
+                    )
+                else:
+                    parts.append(w)
+                idx += 1
+            rendered_lines.append(" ".join(parts).rstrip(","))
+        text = "\\N".join(rendered_lines)
+
+        ass += f"Dialogue: 0,{_fmt_ass_time(p_start)},{_fmt_ass_time(p_end)},Body,,0,0,0,,{anim}{text}\n"
+
+    return ass
+
+
+def _first_emphasis_offset(
+    segments: list[dict], start: float, end: float, emphasis_words: list[str]
+) -> Optional[float]:
+    """Seconds from `start` to the first word in range matching
+    emphasis_words — used to time a riser SFX to end on the payoff line.
+    None if no emphasis word actually falls in this clip's range."""
+    emphasis_set = {t.strip(".,!?\"'").lower() for phrase in emphasis_words for t in phrase.split()}
+    if not emphasis_set:
+        return None
+    for w in _segment_words_in_range(segments, start, end):
+        bare = re.sub(r"[^\w']", "", w["word"]).lower()
+        if bare in emphasis_set:
+            return w["start"] - start
+    return None
+
+
+def render_minimal_faith_clip(
+    filepath: str,
+    segments: list[dict],
+    start: float,
+    end: float,
+    emphasis_words: list[str],
+    output_dir: str = OUTPUT_DIR,
+    zoom_opener: bool = True,
+    bw_grade: bool = False,
+    music_path: Optional[str] = None,
+    whoosh_path: Optional[str] = None,
+    riser_path: Optional[str] = None,
+) -> str:
+    """Render the "minimal-faith" deliverable: generate_minimal_faith_ass's
+    captions plus the edit effects from the prototype — a zoom-out opener,
+    optional B&W grade, a ducked music bed, and up to two SFX (a whoosh on
+    the opener, a riser ending on the first emphasis word). Reuses the
+    existing generic center-crop (not the prototype's hardcoded 1920x1080
+    pixel math, which assumed one fixed source resolution) so this works on
+    any source size.
+
+    music_path/whoosh_path/riser_path are None to skip that layer entirely
+    — callers (main.py) resolve these via music.pick_track()/
+    sfx.pick_whoosh()/sfx.pick_riser() before calling, so this function
+    itself has no opinion on selection, only mixing."""
+    os.makedirs(output_dir, exist_ok=True)
+    duration = end - start
+
+    tag = clip_tag(filepath, start, end, MINIMAL_FAITH_PRESET)
+    ass_path = os.path.join(output_dir, f"{tag}.ass")
+    out_path = os.path.join(output_dir, f"{tag}_captioned.mp4")
+
+    ass_content = generate_minimal_faith_ass(segments, start, end, emphasis_words)
+    with open(ass_path, "w", encoding="utf-8") as f:
+        f.write(ass_content)
+    escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    escaped_fonts_dir = FONTS_DIR.replace(":", "\\:")
+
+    vf = ["crop=ih*9/16:ih:(iw-ih*9/16)/2:0", f"scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}:flags=lanczos"]
+    if zoom_opener:
+        zf = int(round(MINIMAL_FAITH_ZOOM_SECS * 29.97))
+        z = f"1+{MINIMAL_FAITH_ZOOM_FROM - 1:.3f}*pow(1-min(on/{zf},1),3)"
+        vf.append(
+            f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:"
+            f"s={PORTRAIT_WIDTH}x{PORTRAIT_HEIGHT}:fps=30000/1001"
+        )
+    if bw_grade:
+        vf.append("hue=s=0,eq=contrast=1.08")
+    vf.append(f"ass={escaped_ass_path}:fontsdir={escaped_fonts_dir}")
+
+    inputs = ["-ss", str(start), "-t", str(duration), "-i", filepath]
+    filter_complex = [f"[0:v]{','.join(vf)}[v]"]
+    voice_chain = (
+        f"loudnorm=I={MINIMAL_FAITH_VOICE_LUFS}:TP=-1.5:LRA=11,"
+        f"aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
+    )
+    next_input_idx = 1
+
+    if music_path and os.path.exists(music_path):
+        filter_complex.append(f"[0:a]{voice_chain},asplit=2[voice][sc]")
+        inputs += ["-ss", str(MINIMAL_FAITH_MUSIC_OFFSET), "-t", str(duration), "-i", music_path]
+        music_idx, next_input_idx = next_input_idx, next_input_idx + 1
+        filter_complex.append(
+            f"[{music_idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"loudnorm=I={MINIMAL_FAITH_MUSIC_LUFS}:TP=-6,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+            f"afade=t=in:d=0.8,afade=t=out:st={max(duration - 1.2, 0):.2f}:d=1.2[mus]"
+        )
+        # Duck the music a little more whenever he speaks.
+        filter_complex.append("[mus][sc]sidechaincompress=threshold=0.04:ratio=3:attack=30:release=400[duck]")
+        mix_inputs = ["[voice]", "[duck]"]
+    else:
+        filter_complex.append(f"[0:a]{voice_chain}[voice]")
+        mix_inputs = ["[voice]"]
+
+    if whoosh_path and os.path.exists(whoosh_path):
+        idx, next_input_idx = next_input_idx, next_input_idx + 1
+        inputs += ["-i", whoosh_path]
+        filter_complex.append(
+            f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume={MINIMAL_FAITH_WHOOSH_VOLUME},"
+            f"atrim=0:{MINIMAL_FAITH_WHOOSH_MAX_SECS},aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[whoosh]"
+        )
+        mix_inputs.append("[whoosh]")
+
+    if riser_path and os.path.exists(riser_path):
+        riser_end = _first_emphasis_offset(segments, start, end, emphasis_words)
+        if riser_end is not None and riser_end > 0:
+            idx, next_input_idx = next_input_idx, next_input_idx + 1
+            riser_duration = min(3.0, riser_end)
+            riser_delay_ms = round(max(0.0, riser_end - riser_duration) * 1000)
+            inputs += ["-ss", "0", "-t", str(riser_duration), "-i", riser_path]
+            filter_complex.append(
+                f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume={MINIMAL_FAITH_RISER_VOLUME},"
+                f"adelay={riser_delay_ms}|{riser_delay_ms},aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[riser]"
+            )
+            mix_inputs.append("[riser]")
+
+    n = len(mix_inputs)
+    filter_complex.append(
+        f"{''.join(mix_inputs)}amix=inputs={n}:duration=first:dropout_transition=0,volume={n},alimiter=limit=0.95[a]"
+    )
+
+    cmd = [
+        "ffmpeg", "-y", *inputs,
+        "-filter_complex", ";".join(filter_complex),
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        out_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg minimal-faith render failed: {result.stderr[-2000:]}")
+
+    return out_path
 
 
 def clip_tag(

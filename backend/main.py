@@ -30,7 +30,9 @@ import resolve_integration
 import captions
 import commentary
 import commentary_render
+import music
 import performance
+import sfx
 import storage
 
 app = FastAPI(title="Viral Clip Finder")
@@ -74,6 +76,15 @@ class ClipSelection(BaseModel):
     # use_cold_open. Intro is deliberately not offered: anything before the
     # hook hurts retention, so only the outro is ever wired in.
     with_commentary: bool = False
+    # "Minimal Faith" style (retention upgrade plan phase 7) — the new
+    # default caption preset. use_cold_open is silently skipped for this
+    # preset: it renders via its own effects pipeline (zoom/grade/music),
+    # which doesn't have a cold-open crossfade path built for it yet.
+    caption_preset: str = captions.MINIMAL_FAITH_PRESET
+    zoom_opener: bool = True
+    bw_grade: bool = False
+    music_bed: bool = False
+    music_mood: Literal["slow", "cinematic"] = "slow"
 
 
 class SendToResolveRequest(BaseModel):
@@ -357,7 +368,16 @@ def send_to_resolve(req: SendToResolveRequest):
             emphasis_words = matched.get("emphasis_words", []) if matched is not None else []
             pinned_line = matched.get("pinned_line", "") if matched is not None else ""
             pinned_line_emphasis = matched.get("pinned_line_emphasis", []) if matched is not None else []
-            cold_open = matched.get("cold_open") if matched is not None and clip.use_cold_open else None
+            # minimal-faith renders through its own effects pipeline
+            # (zoom/grade/music), which has no cold-open crossfade path
+            # built for it yet — skip rather than silently drop coverage
+            # elsewhere.
+            is_minimal_faith = clip.caption_preset == captions.MINIMAL_FAITH_PRESET
+            cold_open = (
+                matched.get("cold_open")
+                if matched is not None and clip.use_cold_open and not is_minimal_faith
+                else None
+            )
 
             broll_clips = []
             for sel in clip.broll:
@@ -416,7 +436,21 @@ def send_to_resolve(req: SendToResolveRequest):
                 )
 
             caption_path = None
-            if matched is not None and cold_open:
+            if matched is not None and is_minimal_faith:
+                music_path = music.pick_track(clip.music_mood) if clip.music_bed else None
+                whoosh_path = sfx.pick_whoosh() if clip.zoom_opener else None
+                body_path = captions.render_minimal_faith_clip(
+                    filepath=job["filepath"],
+                    segments=job["segments"],
+                    start=clip.start,
+                    end=clip.end,
+                    emphasis_words=emphasis_words,
+                    zoom_opener=clip.zoom_opener,
+                    bw_grade=clip.bw_grade,
+                    music_path=music_path,
+                    whoosh_path=whoosh_path,
+                )
+            elif matched is not None and cold_open:
                 body_path = commentary_render.build_clip_with_cold_open(
                     filepath=job["filepath"],
                     segments=job["segments"],
@@ -426,6 +460,7 @@ def send_to_resolve(req: SendToResolveRequest):
                     emphasis_words=emphasis_words,
                     pinned_line=pinned_line,
                     pinned_line_emphasis=pinned_line_emphasis,
+                    preset_name=clip.caption_preset,
                 )
             elif matched is not None:
                 body_path = captions.burn_captions(
@@ -436,6 +471,7 @@ def send_to_resolve(req: SendToResolveRequest):
                     emphasis_words=emphasis_words,
                     pinned_line=pinned_line,
                     pinned_line_emphasis=pinned_line_emphasis,
+                    preset_name=clip.caption_preset,
                 )
             else:
                 body_path = None
