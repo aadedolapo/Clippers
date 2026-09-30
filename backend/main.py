@@ -379,6 +379,12 @@ def send_to_resolve(req: SendToResolveRequest):
                 else None
             )
 
+            # Picked once so the Resolve timeline's audio tracks and the
+            # rendered deliverable mp4 (below) use the exact same files,
+            # rather than each independently rolling a different random pick.
+            music_path = music.pick_track(clip.music_mood) if is_minimal_faith and clip.music_bed else None
+            whoosh_path = sfx.pick_whoosh() if is_minimal_faith and clip.zoom_opener else None
+
             broll_clips = []
             for sel in clip.broll:
                 try:
@@ -416,6 +422,8 @@ def send_to_resolve(req: SendToResolveRequest):
                     end=clip.end,
                     broll_clips=broll_clips,
                     cold_open=cold_open,
+                    music_path=music_path,
+                    whoosh_path=whoosh_path,
                 )
             elif commentary_close_path:
                 resolve_integration.send_clip_with_commentary_to_resolve(
@@ -425,6 +433,8 @@ def send_to_resolve(req: SendToResolveRequest):
                     end=clip.end,
                     close_path=commentary_close_path,
                     cold_open=cold_open,
+                    music_path=music_path,
+                    whoosh_path=whoosh_path,
                 )
             else:
                 resolve_integration.send_clip_to_resolve(
@@ -433,12 +443,12 @@ def send_to_resolve(req: SendToResolveRequest):
                     start=clip.start,
                     end=clip.end,
                     cold_open=cold_open,
+                    music_path=music_path,
+                    whoosh_path=whoosh_path,
                 )
 
             caption_path = None
             if matched is not None and is_minimal_faith:
-                music_path = music.pick_track(clip.music_mood) if clip.music_bed else None
-                whoosh_path = sfx.pick_whoosh() if clip.zoom_opener else None
                 body_path = captions.render_minimal_faith_clip(
                     filepath=job["filepath"],
                     segments=job["segments"],

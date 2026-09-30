@@ -11,6 +11,8 @@ import re
 import sys
 from typing import Optional
 
+import captions
+
 logger = logging.getLogger(__name__)
 
 _resolve = None
@@ -29,6 +31,13 @@ TIMELINE_HEIGHT = 1920
 # a short clip, which this default is sized for.
 DEFAULT_BROLL_CUTAWAY_SECONDS = 2.5
 BROLL_TRACK_INDEX = 2
+
+# Audio tracks for the minimal-faith music bed / whoosh, when sent to the
+# Resolve timeline alongside the clip (separate namespace from
+# BROLL_TRACK_INDEX above, which is a video track) — track 1 stays the main
+# clip's own synced audio.
+MUSIC_TRACK_INDEX = 2
+WHOOSH_TRACK_INDEX = 3
 
 
 def _setup_resolve_env() -> None:
@@ -343,6 +352,75 @@ def _insert_broll_overlay(
         raise RuntimeError("Resolve failed to insert a B-roll overlay clip")
 
 
+def _insert_audio_overlay(
+    media_pool,
+    audio_item,
+    start_frame: int,
+    end_frame: int,
+    record_frame: int,
+    track_index: int,
+) -> None:
+    """Drop an audio-only item onto `track_index` at an explicit timeline
+    position — same AppendToTimeline dict pattern as _insert_broll_overlay's
+    video track, just mediaType=2 (audio only) instead of 1."""
+    result = media_pool.AppendToTimeline([{
+        "mediaPoolItem": audio_item,
+        "startFrame": start_frame,
+        "endFrame": end_frame,
+        "recordFrame": record_frame,
+        "trackIndex": track_index,
+        "mediaType": 2,
+    }])
+    if not result or result[0] is None:
+        raise RuntimeError("Resolve failed to insert an audio overlay clip")
+
+
+def _add_music_and_whoosh(
+    media_pool,
+    timeline,
+    main_item,
+    fps: float,
+    duration: float,
+    music_path: Optional[str],
+    whoosh_path: Optional[str],
+) -> None:
+    """Add the minimal-faith music bed / whoosh as separate audio tracks
+    (2 and 3) under `main_item`'s landing position on the timeline — same
+    trim offsets as captions.py's rendered mp4 (MINIMAL_FAITH_MUSIC_OFFSET/
+    MINIMAL_FAITH_WHOOSH_MAX_SECS) so what plays on the timeline roughly
+    matches the deliverable file. Not ducked or level-matched here — that
+    mixing only happens in the rendered mp4's ffmpeg pass; this is a plain
+    unmixed overlay for editing in Resolve directly.
+
+    Best-effort per track, matching _insert_broll_overlay's tolerance for a
+    bad pick: a failed music or whoosh insert is logged and skipped rather
+    than failing the whole send."""
+    if not music_path and not whoosh_path:
+        return
+    record_frame = main_item.GetStart()
+
+    if music_path and os.path.exists(music_path):
+        try:
+            if timeline.GetTrackCount("audio") < MUSIC_TRACK_INDEX:
+                timeline.AddTrack("audio")
+            music_item = _import_media(media_pool, music_path)
+            start_frame = round(captions.MINIMAL_FAITH_MUSIC_OFFSET * fps)
+            end_frame = start_frame + max(0, round(duration * fps) - 1)
+            _insert_audio_overlay(media_pool, music_item, start_frame, end_frame, record_frame, MUSIC_TRACK_INDEX)
+        except Exception:
+            logger.exception(f"failed to insert music bed from {music_path}")
+
+    if whoosh_path and os.path.exists(whoosh_path):
+        try:
+            if timeline.GetTrackCount("audio") < WHOOSH_TRACK_INDEX:
+                timeline.AddTrack("audio")
+            whoosh_item = _import_media(media_pool, whoosh_path)
+            end_frame = max(0, round(captions.MINIMAL_FAITH_WHOOSH_MAX_SECS * fps) - 1)
+            _insert_audio_overlay(media_pool, whoosh_item, 0, end_frame, record_frame, WHOOSH_TRACK_INDEX)
+        except Exception:
+            logger.exception(f"failed to insert whoosh from {whoosh_path}")
+
+
 def send_clip_to_resolve(
     filepath: str,
     title: str,
@@ -350,13 +428,18 @@ def send_clip_to_resolve(
     end: float,
     framing: str = "fill",
     cold_open: Optional[dict] = None,
+    music_path: Optional[str] = None,
+    whoosh_path: Optional[str] = None,
 ) -> None:
     """cold_open, when given ({"start", "end"} in source-media seconds), is
     appended from the same media pool item immediately before the main
     range — same flash-forward effect as the standalone captioned mp4
     (commentary_render.build_clip_with_cold_open), but as two plain
     timeline appends rather than a rendered crossfade, matching how the
-    commentary bookends are appended as separate items."""
+    commentary bookends are appended as separate items.
+
+    music_path/whoosh_path, when given, land as separate audio tracks under
+    the main clip — see _add_music_and_whoosh."""
     project = _get_project()
     media_pool = project.GetMediaPool()
 
@@ -375,7 +458,8 @@ def send_clip_to_resolve(
     start_frame = round(start * fps)
     end_frame = max(start_frame, round(end * fps) - 1)
 
-    _append_clip(media_pool, timeline, media_pool_item, start_frame, end_frame, framing=framing)
+    main_item = _append_clip(media_pool, timeline, media_pool_item, start_frame, end_frame, framing=framing)
+    _add_music_and_whoosh(media_pool, timeline, main_item, fps, end - start, music_path, whoosh_path)
 
 
 def send_clip_with_broll_to_resolve(
@@ -386,6 +470,8 @@ def send_clip_with_broll_to_resolve(
     broll_clips: list[dict],
     framing: str = "fill",
     cold_open: Optional[dict] = None,
+    music_path: Optional[str] = None,
+    whoosh_path: Optional[str] = None,
 ) -> None:
     """Same as send_clip_to_resolve, but also drops each already-downloaded
     B-roll pick onto a second video track as a full-frame cutaway (video
@@ -401,6 +487,9 @@ def send_clip_with_broll_to_resolve(
     cold_open, when given, is appended before the main clip exactly as in
     send_clip_to_resolve — B-roll offsets/record-frame math below is
     unaffected since it's still anchored to main_item's own GetStart().
+
+    music_path/whoosh_path, when given, land as separate audio tracks under
+    the main clip — see _add_music_and_whoosh.
 
     Best-effort per pick: a bad download/import for one B-roll clip is
     logged and skipped rather than failing the whole send, since the main
@@ -423,6 +512,7 @@ def send_clip_with_broll_to_resolve(
     clip_start_frame = round(start * fps)
     clip_end_frame = max(clip_start_frame, round(end * fps) - 1)
     main_item = _append_clip(media_pool, timeline, media_pool_item, clip_start_frame, clip_end_frame, framing=framing)
+    _add_music_and_whoosh(media_pool, timeline, main_item, fps, end - start, music_path, whoosh_path)
 
     if not broll_clips:
         return
@@ -475,6 +565,8 @@ def send_clip_with_commentary_to_resolve(
     close_path: Optional[str] = None,
     framing: str = "fill",
     cold_open: Optional[dict] = None,
+    music_path: Optional[str] = None,
+    whoosh_path: Optional[str] = None,
 ) -> None:
     """Same as send_clip_to_resolve, but appends the already-rendered
     commentary segments (background + captions + narration baked in by
@@ -510,7 +602,8 @@ def send_clip_with_commentary_to_resolve(
 
     start_frame = round(start * fps)
     end_frame = max(start_frame, round(end * fps) - 1)
-    _append_clip(media_pool, timeline, media_pool_item, start_frame, end_frame, framing=framing)
+    main_item = _append_clip(media_pool, timeline, media_pool_item, start_frame, end_frame, framing=framing)
+    _add_music_and_whoosh(media_pool, timeline, main_item, fps, end - start, music_path, whoosh_path)
 
     if close_path:
         close_item = _import_media(media_pool, close_path)
