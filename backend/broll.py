@@ -191,10 +191,41 @@ def download_broll_file(url: str, dest_path: str) -> str:
     return dest_path
 
 
+def find_broll_for_beats(clip: dict, beat_plan: list[dict]) -> list[dict]:
+    """B-roll placement driven by an explicit beat plan (beat_plan.py)
+    instead of freeform query generation: one pick per "broll"/"broll_sound"
+    beat, searched directly on that beat's own `note` (already written to
+    the same concreteness bar as a Pexels query — see beat_plan.py's
+    SYSTEM_PROMPT), with `offset`/`duration` taken exactly from the beat's
+    own start/end rather than locate_quote_offset's fuzzy first-word match.
+    Zero extra Claude calls beyond the beat plan itself, which the caller
+    already generated separately."""
+    if not PEXELS_API_KEY:
+        raise RuntimeError("PEXELS_API_KEY is not set — add it to backend/.env to fetch B-roll.")
+
+    picks = []
+    for beat in beat_plan:
+        if beat.get("beat_type") not in ("broll", "broll_sound"):
+            continue
+        note = (beat.get("note") or "").strip()
+        if not note:
+            continue
+        pick = search_broll(note)
+        if not pick:
+            continue
+        pick["query"] = note
+        pick["quote"] = ""
+        pick["offset"] = round(beat["start"] - clip["start"], 2)
+        pick["duration"] = round(beat["end"] - beat["start"], 2)
+        picks.append(pick)
+    return picks
+
+
 def find_broll_for_clip(
     clip: dict,
     queries_per_clip: int = DEFAULT_QUERIES_PER_CLIP,
     segments: Optional[list[dict]] = None,
+    beat_plan: Optional[list[dict]] = None,
 ) -> list[dict]:
     """Full B-roll pipeline for one already-selected clip: generate visual
     search queries from its text/core idea (§8), then search Pexels and take
@@ -206,11 +237,18 @@ def find_broll_for_clip(
     until a human picks one and sends it to Resolve (see main.py's
     /send-to-resolve).
 
+    When `beat_plan` is given (and non-empty), placement is delegated to
+    find_broll_for_beats instead — precise, beat-anchored offsets rather
+    than this function's own freeform query generation + fuzzy quote match.
+
     When `segments` (the video's word-level transcript) is given, each pick
     also gets an "offset" (seconds from the clip's own start) computed from
     its query's source quote via locate_quote_offset, so a selected pick
     can be placed at the right point in the clip rather than always at the
     very start."""
+    if beat_plan:
+        return find_broll_for_beats(clip, beat_plan)
+
     if not PEXELS_API_KEY:
         raise RuntimeError("PEXELS_API_KEY is not set — add it to backend/.env to fetch B-roll.")
 

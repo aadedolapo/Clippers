@@ -169,6 +169,7 @@ def build_clip_with_cold_open(
     preset_name: str = captions.DEFAULT_PRESET,
     pinned_line: Optional[str] = None,
     pinned_line_emphasis: Optional[list[str]] = None,
+    comment_bait_question: Optional[str] = None,
     crossfade: float = 0.15,
     add_captions: bool = True,
 ) -> str:
@@ -179,6 +180,10 @@ def build_clip_with_cold_open(
     intentional (the strongest line plays once as the bumper, then again in
     its natural place in the main clip), so the main clip is always rendered
     in full regardless of where cold_open sits.
+
+    comment_bait_question, when given, applies only to the main clip (the
+    tail end of the whole deliverable) — never to the cold-open bumper.
+    Independent of add_captions, same as captions.burn_captions.
 
     add_captions=False skips burned-in captions (and pinned_line) on both
     parts — for callers who'll add their own subtitle template by hand in
@@ -196,7 +201,8 @@ def build_clip_with_cold_open(
     main_path = captions.burn_captions(
         filepath, segments, start, end, emphasis_words, preset_name=preset_name, output_dir=output_dir,
         pinned_line=pinned_line if add_captions else None,
-        pinned_line_emphasis=pinned_line_emphasis, add_captions=add_captions,
+        pinned_line_emphasis=pinned_line_emphasis,
+        comment_bait_question=comment_bait_question, add_captions=add_captions,
     )
     main_tag = captions.clip_tag(filepath, start, end, preset_name)
     intermediates = [cold_path, main_path]
@@ -205,6 +211,8 @@ def build_clip_with_cold_open(
         intermediates.append(os.path.join(output_dir, f"{main_tag}.ass"))
         if pinned_line:
             intermediates.append(os.path.join(output_dir, f"{main_tag}_pinned.ass"))
+    if comment_bait_question:
+        intermediates.append(os.path.join(output_dir, f"{main_tag}_bait.ass"))
 
     final_path = os.path.join(output_dir, f"{tag_root}_coldopen.mp4")
     concat_with_crossfade(cold_path, main_path, final_path, crossfade=crossfade)

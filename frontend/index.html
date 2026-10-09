@@ -252,6 +252,20 @@
     margin-right: 8px;
   }
   .clip-broll { margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .clip-beatplan { margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .clip-beat-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 12px;
+    background: rgba(110, 168, 254, 0.06);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+  }
+  .clip-beat-time { font-variant-numeric: tabular-nums; color: var(--muted); flex-shrink: 0; }
+  .clip-beat-type { font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--accent); flex-shrink: 0; }
+  .clip-beat-note { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .clip-broll-pick {
     display: flex;
     gap: 10px;
@@ -614,6 +628,8 @@ function createSession(name, insertAt) {
           ${fieldsHtml ? '<button type="button" class="clip-download-btn">Download title/hook/desc</button>' : ""}
           <button type="button" class="clip-broll-btn">Suggest B-roll</button>
           <div class="clip-broll"></div>
+          <button type="button" class="clip-beatplan-btn">Suggest beat plan</button>
+          <div class="clip-beatplan"></div>
           <div class="clip-text">${escapeHtml(clip.text)}</div>
           <div class="clip-performance">
             <button type="button" class="clip-mark-posted-btn">Mark as posted</button>
@@ -698,7 +714,11 @@ function createSession(name, insertAt) {
         brollBtn.textContent = "Searching…";
         brollEl.innerHTML = "";
         try {
-          const res = await fetch(`/broll/${videoId}/${i}`, { method: "POST" });
+          const res = await fetch(`/broll/${videoId}/${i}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ beat_plan: clip.beatPlan || [] }),
+          });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.detail || `B-roll search failed (${res.status})`);
           if (!data.picks || data.picks.length === 0) {
@@ -733,6 +753,43 @@ function createSession(name, insertAt) {
           brollBtn.textContent = "Suggest B-roll";
         }
       });
+
+      const beatPlanBtn = el.querySelector(".clip-beatplan-btn");
+      const beatPlanEl = el.querySelector(".clip-beatplan");
+      beatPlanBtn.addEventListener("click", async () => {
+        beatPlanBtn.disabled = true;
+        beatPlanBtn.textContent = "Planning…";
+        beatPlanEl.innerHTML = "";
+        try {
+          const res = await fetch(`/beat-plan/${videoId}/${i}`, { method: "POST" });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.detail || `Beat plan generation failed (${res.status})`);
+          if (!data.beat_plan || data.beat_plan.length === 0) {
+            beatPlanEl.innerHTML = `<div style="color: var(--muted); font-size: 12px;">No beat plan generated.</div>`;
+          } else {
+            clip.beatPlan = data.beat_plan;
+            beatPlanEl.innerHTML = data.beat_plan
+              .map((b) => {
+                const relStart = (b.start - clip.start).toFixed(1);
+                const relEnd = (b.end - clip.start).toFixed(1);
+                const detail = b.note || b.emphasis_word || "";
+                return `
+                  <div class="clip-beat-row">
+                    <span class="clip-beat-time">${relStart}-${relEnd}s</span>
+                    <span class="clip-beat-type">${escapeHtml(b.beat_type)}</span>
+                    <span class="clip-beat-note">${escapeHtml(detail)}</span>
+                  </div>`;
+              })
+              .join("");
+          }
+        } catch (e) {
+          beatPlanEl.innerHTML = `<div style="color: var(--bad); font-size: 12px;">${escapeHtml(e.message)}</div>`;
+        } finally {
+          beatPlanBtn.disabled = false;
+          beatPlanBtn.textContent = "Suggest beat plan";
+        }
+      });
+
       el.querySelectorAll(".clip-field").forEach((fieldEl) => {
         const value = clip[fieldEl.dataset.field];
         const copyBtn = fieldEl.querySelector(".clip-field-copy");
@@ -811,6 +868,13 @@ function createSession(name, insertAt) {
           duration: p.duration,
         };
       });
+      const beat_plan = (clip.beatPlan || []).map((b) => ({
+        beat_type: b.beat_type,
+        start: b.start,
+        end: b.end,
+        note: b.note || null,
+        emphasis_word: b.emphasis_word || null,
+      }));
       const coldOpenCheckbox = clipEl.querySelector(".clip-coldopen-checkbox");
       const use_cold_open = coldOpenCheckbox ? coldOpenCheckbox.checked : true;
       const with_commentary = clipEl.querySelector(".clip-commentary-checkbox").checked;
@@ -820,7 +884,7 @@ function createSession(name, insertAt) {
       const music_bed = clipEl.querySelector(".clip-music-bed-checkbox").checked;
       const music_mood = clipEl.querySelector(".clip-music-mood").value;
       return {
-        start: clip.start, end: clip.end, broll, use_cold_open, with_commentary,
+        start: clip.start, end: clip.end, broll, beat_plan, use_cold_open, with_commentary,
         caption_preset, zoom_opener, bw_grade, music_bed, music_mood,
       };
     });

@@ -6,9 +6,12 @@ FastAPI wrapper around the pipeline (PRD section 8): /analyze, /send-to-resolve,
 import hashlib
 import logging
 import os
+import subprocess
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from typing import Literal, Optional
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -23,8 +26,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from pipeline import download_video, use_local_file, unique_download_path, transcribe
+from pipeline import DOWNLOAD_DIR, download_video, use_local_file, unique_download_path, transcribe
 from scoring import score_video
+import agent
+import beat_plan
 import broll
 import resolve_integration
 import captions
@@ -34,12 +39,40 @@ import music
 import performance
 import sfx
 import storage
-
-app = FastAPI(title="Viral Clip Finder")
+import watcher
 
 EXECUTOR = ThreadPoolExecutor(max_workers=2)
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
+
+# 4K Video Downloader's output folder. Unset means no watching; videos can
+# still be analyzed by hand through the UI.
+WATCH_DIR = os.environ.get("CLIPPER_WATCH_DIR")
+
+
+def _submit_job(local_file: Optional[str] = None, url: Optional[str] = None,
+                title: Optional[str] = None, source: Optional[str] = None,
+                use_agent: bool = False) -> str:
+    job_id = str(uuid.uuid4())
+    with JOBS_LOCK:
+        JOBS[job_id] = {"status": "queued", "url": url, "local_file": local_file, "agent": use_agent,
+                        "created_at": time.time(), "events": []}
+    EXECUTOR.submit(_run_analysis, job_id, url, local_file, title, source, use_agent)
+    return job_id
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    if WATCH_DIR:
+        # use_local_file copies into DOWNLOAD_DIR, so watching that folder
+        # would pick up its own copies as new videos.
+        if os.path.realpath(os.path.expanduser(WATCH_DIR)) == os.path.realpath(DOWNLOAD_DIR):
+            raise RuntimeError("CLIPPER_WATCH_DIR must not be backend/downloads; point it at 4K Video Downloader's folder")
+        watcher.start_watcher(WATCH_DIR, lambda path: _submit_job(local_file=path, use_agent=True))
+    yield
+
+
+app = FastAPI(title="Viral Clip Finder", lifespan=lifespan)
 
 JobStatus = Literal["queued", "downloading", "transcribing", "scoring", "done", "error"]
 
@@ -52,6 +85,9 @@ class AnalyzeRequest(BaseModel):
     # per video for future permission outreach and claim tracing (PRD
     # pipeline step 6).
     source: Optional[str] = None
+    # Let the orchestrator agent (agent.py) review and pick clips instead of
+    # taking the scorer's top 3 as-is. Watch-folder jobs always use it.
+    agent: bool = False
 
 
 class BrollSelection(BaseModel):
@@ -63,10 +99,22 @@ class BrollSelection(BaseModel):
     duration: Optional[float] = None
 
 
+class BeatPlanItem(BaseModel):
+    beat_type: str
+    start: float
+    end: float
+    note: Optional[str] = None
+    emphasis_word: Optional[str] = None
+
+
 class ClipSelection(BaseModel):
     start: float
     end: float
     broll: list[BrollSelection] = []
+    # Editorial beat structure (beat_plan.py) fetched on demand per clip and
+    # resent here, same round-trip pattern as `broll` above — empty means
+    # "no beat plan requested for this clip," not an error.
+    beat_plan: list[BeatPlanItem] = []
     # Per-clip on/off toggle for the cold open a clip may have — defaults to
     # on when the clip has one, since the retention upgrade is opt-out, not
     # opt-in (the plan's UI is a checkbox to turn it OFF, not on).
@@ -76,6 +124,11 @@ class ClipSelection(BaseModel):
     # use_cold_open. Intro is deliberately not offered: anything before the
     # hook hurts retention, so only the outro is ever wired in.
     with_commentary: bool = False
+    # A short on-screen comment-bait question after the clip ends — text
+    # only, never spoken, so it never triggers a second ElevenLabs TTS call
+    # even when with_commentary is also on (both reuse the same
+    # commentary.py call; see send_to_resolve).
+    comment_bait: bool = False
     # "Minimal Faith" style (retention upgrade plan phase 7) — the new
     # default caption preset. use_cold_open is silently skipped for this
     # preset: it renders via its own effects pipeline (zoom/grade/music),
@@ -114,6 +167,12 @@ def _set_job(job_id: str, **fields):
         JOBS[job_id].update(fields)
 
 
+def _job_event(job_id: str, kind: str, text: str):
+    """Append to a job's activity feed, shown live on the /agent page."""
+    with JOBS_LOCK:
+        JOBS[job_id].setdefault("events", []).append({"t": time.time(), "kind": kind, "text": text})
+
+
 def _serialize_clip(c: dict) -> dict:
     return {
         "start": c["start"],
@@ -130,6 +189,7 @@ def _serialize_clip(c: dict) -> dict:
         "seo_description": c["seo_description"],
         "scorecard": c["scorecard"],
         "cold_open": c.get("cold_open"),
+        "agent_note": c.get("agent_note"),
     }
 
 
@@ -150,23 +210,34 @@ def _run_analysis(
     local_file: Optional[str] = None,
     title: Optional[str] = None,
     source: Optional[str] = None,
+    use_agent: bool = False,
 ):
     try:
         _set_job(job_id, status="downloading")
+        _job_event(job_id, "stage", f"Loading {local_file or url}")
         info = use_local_file(local_file, title=title) if local_file else download_video(url)
         filepath = info["_filepath"]
         video_id = info["id"]
         title = info.get("title", video_id)
 
         _set_job(job_id, status="transcribing", video_id=video_id, title=title, filepath=filepath, source=source)
+        _job_event(job_id, "stage", "Transcribing with faster-whisper (the slow part on CPU)")
         segments = transcribe(filepath)
+        _job_event(job_id, "stage", f"Transcribed {len(segments)} segments, {segments[-1]['end'] / 60:.1f} min of speech" if segments else "Transcript is empty")
 
         _set_job(job_id, status="scoring", segments=segments)
-        # 8 per video (up from 5) so the daily shortlist pool spans 15-25
-        # candidates across a normal day's 3-4 source videos.
-        clips, rejected = score_video(segments, filepath, top_n=8)
+        agent_summary = None
+        if use_agent:
+            clips, rejected, agent_summary = agent.run_agent(
+                segments, filepath, title, source=source,
+                on_event=lambda kind, text: _job_event(job_id, kind, text),
+            )
+        else:
+            # Top 3 per video — 8 was producing more candidates than were
+            # actually worth reviewing per video.
+            clips, rejected = score_video(segments, filepath, top_n=3)
 
-        _set_job(job_id, status="done", clips=clips, rejected=rejected)
+        _set_job(job_id, status="done", clips=clips, rejected=rejected, agent_summary=agent_summary)
         # Persist hook/title/description (and timing) to disk immediately so
         # they survive a browser refresh even though JOBS is in-memory only.
         copyright_status = storage.save_session(
@@ -176,6 +247,7 @@ def _run_analysis(
     except Exception as e:
         logger.exception(f"analyze job {job_id} failed")
         _set_job(job_id, status="error", error=str(e))
+        _job_event(job_id, "error", str(e))
 
 
 @app.post("/upload")
@@ -199,11 +271,49 @@ def analyze(req: AnalyzeRequest):
     if bool(req.url) == bool(req.local_file):
         raise HTTPException(status_code=400, detail="Provide exactly one of 'url' or 'local_file'")
 
-    job_id = str(uuid.uuid4())
-    with JOBS_LOCK:
-        JOBS[job_id] = {"status": "queued", "url": req.url}
-    EXECUTOR.submit(_run_analysis, job_id, req.url, req.local_file, req.title, req.source)
+    job_id = _submit_job(local_file=req.local_file, url=req.url, title=req.title,
+                         source=req.source, use_agent=req.agent)
     return {"job_id": job_id}
+
+
+@app.get("/jobs")
+def list_jobs():
+    """Every job this server process has run, newest last — the only way to
+    see watch-folder jobs, which no browser tab started."""
+    with JOBS_LOCK:
+        jobs = [
+            {"job_id": jid, "status": j["status"], "title": j.get("title") or os.path.basename(j.get("local_file") or j.get("url") or ""),
+             "video_id": j.get("video_id"), "agent": j.get("agent", False), "error": j.get("error"),
+             "created_at": j.get("created_at")}
+            for jid, j in JOBS.items()
+        ]
+    return {"jobs": jobs, "watch_dir": WATCH_DIR}
+
+
+@app.get("/local-videos")
+def local_videos():
+    """Videos already in backend/downloads, for starting an agent run from
+    the /agent page without going through 4K Video Downloader."""
+    videos = []
+    for name in sorted(os.listdir(DOWNLOAD_DIR)):
+        path = os.path.join(DOWNLOAD_DIR, name)
+        if not os.path.isfile(path) or os.path.splitext(name)[1].lower() not in watcher.VIDEO_EXTS:
+            continue
+        try:
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                capture_output=True, text=True, timeout=10,
+            )
+            minutes = float(out.stdout.strip()) / 60
+        except (subprocess.SubprocessError, ValueError):
+            minutes = 0.0
+        videos.append({"name": name, "path": path, "minutes": minutes})
+    return {"videos": videos}
+
+
+@app.get("/agent")
+def agent_page():
+    return FileResponse(os.path.join(FRONTEND_DIR, "agent.html"))
 
 
 @app.get("/status/{job_id}")
@@ -213,7 +323,8 @@ def status(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
-    response = {"status": job["status"]}
+    response = {"status": job["status"], "agent": job.get("agent", False), "title": job.get("title"),
+                "events": job.get("events", [])}
     if job["status"] == "error":
         response["error"] = job.get("error")
     if job["status"] == "done":
@@ -223,6 +334,7 @@ def status(job_id: str):
         response["copyright_status"] = job.get("copyright_status", storage.DEFAULT_COPYRIGHT_STATUS)
         response["clips"] = [_serialize_clip(c) for c in job["clips"]]
         response["rejected"] = [_serialize_rejected(c) for c in job.get("rejected", [])]
+        response["agent_summary"] = job.get("agent_summary")
     return response
 
 
@@ -400,19 +512,27 @@ def send_to_resolve(req: SendToResolveRequest):
             # rendering it twice would mean a second TTS call for no reason.
             commentary_close_path = None
             commentary_intermediates: list[str] = []
-            if matched is not None and clip.with_commentary:
+            # Text-only, never spoken — comment_bait alone doesn't need TTS,
+            # so it shares with_commentary's single Claude call (both fields
+            # come back from the same commentary.py response) but never adds
+            # a second ElevenLabs call on top of it.
+            comment_bait_question = None
+            if matched is not None and (clip.with_commentary or clip.comment_bait):
                 commentary_result = commentary.generate_commentary_for_clips(
                     [matched], video_title=job["title"], source=job.get("source"),
                 )[0]
-                close_text = commentary_result.get("commentary_close")
-                if close_text:
-                    base = os.path.splitext(os.path.basename(job["filepath"]))[0]
-                    tag = f"{base}_{clip.start:.1f}-{clip.end:.1f}_outro"
-                    close_render = commentary_render.render_commentary_segment(
-                        close_text, job["filepath"], max(0.0, clip.end - 0.5), captions.OUTPUT_DIR, tag,
-                    )
-                    commentary_close_path = close_render["path"]
-                    commentary_intermediates = close_render["intermediates"]
+                if clip.comment_bait:
+                    comment_bait_question = commentary_result.get("comment_bait_question") or None
+                if clip.with_commentary:
+                    close_text = commentary_result.get("commentary_close")
+                    if close_text:
+                        base = os.path.splitext(os.path.basename(job["filepath"]))[0]
+                        tag = f"{base}_{clip.start:.1f}-{clip.end:.1f}_outro"
+                        close_render = commentary_render.render_commentary_segment(
+                            close_text, job["filepath"], max(0.0, clip.end - 0.5), captions.OUTPUT_DIR, tag,
+                        )
+                        commentary_close_path = close_render["path"]
+                        commentary_intermediates = close_render["intermediates"]
 
             if broll_clips:
                 resolve_integration.send_clip_with_broll_to_resolve(
@@ -459,6 +579,7 @@ def send_to_resolve(req: SendToResolveRequest):
                     bw_grade=clip.bw_grade,
                     music_path=music_path,
                     whoosh_path=whoosh_path,
+                    comment_bait_question=comment_bait_question,
                     add_captions=False,  # captions are added by hand in Resolve; never burned in here
                 )
             elif matched is not None and cold_open:
@@ -472,6 +593,7 @@ def send_to_resolve(req: SendToResolveRequest):
                     pinned_line=pinned_line,
                     pinned_line_emphasis=pinned_line_emphasis,
                     preset_name=clip.caption_preset,
+                    comment_bait_question=comment_bait_question,
                     add_captions=False,  # captions are added by hand in Resolve; never burned in here
                 )
             elif matched is not None:
@@ -484,6 +606,7 @@ def send_to_resolve(req: SendToResolveRequest):
                     pinned_line=pinned_line,
                     pinned_line_emphasis=pinned_line_emphasis,
                     preset_name=clip.caption_preset,
+                    comment_bait_question=comment_bait_question,
                     add_captions=False,  # captions are added by hand in Resolve; never burned in here
                 )
             else:
@@ -536,8 +659,15 @@ def _find_job_by_video_id(video_id: str) -> Optional[dict]:
     return None
 
 
+class SuggestBrollRequest(BaseModel):
+    # When given (non-empty), B-roll placement is anchored to these beats'
+    # own start/end instead of freeform query generation + fuzzy quote
+    # matching — see broll.find_broll_for_beats.
+    beat_plan: list[BeatPlanItem] = []
+
+
 @app.post("/broll/{video_id}/{clip_index}")
-def suggest_broll(video_id: str, clip_index: int):
+def suggest_broll(video_id: str, clip_index: int, req: SuggestBrollRequest = SuggestBrollRequest()):
     """PRD §7-8 B-roll engine, on demand per clip — this isn't run
     automatically for every clip during /analyze, since each call is a
     Claude call (query generation) on top of several Pexels searches."""
@@ -547,8 +677,11 @@ def suggest_broll(video_id: str, clip_index: int):
     if clip_index < 0 or clip_index >= len(job["clips"]):
         raise HTTPException(status_code=404, detail="clip index out of range")
 
+    beat_plan_dicts = [b.model_dump() for b in req.beat_plan] if req.beat_plan else None
     try:
-        picks = broll.find_broll_for_clip(job["clips"][clip_index], segments=job.get("segments"))
+        picks = broll.find_broll_for_clip(
+            job["clips"][clip_index], segments=job.get("segments"), beat_plan=beat_plan_dicts,
+        )
     except RuntimeError as e:
         # Missing PEXELS_API_KEY — an actionable 400, not a crash, since
         # B-roll is opt-in and most sessions won't have set it.
@@ -558,6 +691,26 @@ def suggest_broll(video_id: str, clip_index: int):
         raise HTTPException(status_code=502, detail=f"B-roll search failed: {e}")
 
     return {"picks": picks}
+
+
+@app.post("/beat-plan/{video_id}/{clip_index}")
+def suggest_beat_plan(video_id: str, clip_index: int):
+    """beat_plan.py's editorial-structure engine, on demand per clip — one
+    Claude call, same "not run automatically during /analyze" posture as
+    /broll above."""
+    job = _find_job_by_video_id(video_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="video not found; run /analyze first")
+    if clip_index < 0 or clip_index >= len(job["clips"]):
+        raise HTTPException(status_code=404, detail="clip index out of range")
+
+    try:
+        beats = beat_plan.generate_beat_plan(job["clips"][clip_index], job["segments"])
+    except Exception as e:
+        logger.exception(f"beat plan generation failed for {video_id} clip {clip_index}")
+        raise HTTPException(status_code=502, detail=f"Beat plan generation failed: {e}")
+
+    return {"beat_plan": beats}
 
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")

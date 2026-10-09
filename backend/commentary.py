@@ -59,6 +59,10 @@ subscribe."
 the clip with your own angle, not a summary of what's about to be said
 - a short spoken CLOSE (roughly 8-16 words / 3-5 seconds aloud) — extends the thought \
 after the clip ends
+- "comment_bait_question": one short question (roughly 6-12 words), displayed as on-screen \
+text after the clip ends, designed to make a viewer want to reply in the comments — a real \
+question with more than one reasonable answer (e.g. "Which one hits closer to home for \
+you?"), never a yes/no question or a restatement of the takeaway/cta
 
 Vary your angle across the clips you're given; do not reuse the same structure, opening \
 phrase, or format twice in this batch. Draw from different approaches as appropriate to \
@@ -80,6 +84,7 @@ in the same order given. Each object must have:
 - "cta": string
 - "commentary_intro": string
 - "commentary_close": string
+- "comment_bait_question": string
 """
 
 
@@ -92,9 +97,9 @@ def generate_commentary_for_clips(
     already-selected clip in one batched call. Returns a list the same
     length/order as `clips`, each item {"core_idea", "commentary",
     "takeaway", "cta", "commentary_intro", "commentary_close",
-    "commentary_angle"} — empty strings for any clip the model didn't return
-    a usable result for, so callers can merge positionally without
-    special-casing failures."""
+    "comment_bait_question", "commentary_angle"} — empty strings for any
+    clip the model didn't return a usable result for, so callers can merge
+    positionally without special-casing failures."""
     if not clips:
         return []
 
@@ -143,7 +148,8 @@ def generate_commentary_for_clips(
 
     empty = {
         "core_idea": "", "commentary": "", "takeaway": "", "cta": "",
-        "commentary_intro": "", "commentary_close": "", "commentary_angle": "",
+        "commentary_intro": "", "commentary_close": "", "comment_bait_question": "",
+        "commentary_angle": "",
     }
     out = []
     for i in range(len(clips)):
@@ -158,6 +164,7 @@ def generate_commentary_for_clips(
             "cta": result.get("cta", ""),
             "commentary_intro": result.get("commentary_intro", ""),
             "commentary_close": result.get("commentary_close", ""),
+            "comment_bait_question": result.get("comment_bait_question", ""),
             "commentary_angle": result.get("angle", ""),
         })
     return out

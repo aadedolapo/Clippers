@@ -92,6 +92,24 @@ PINNED_LINE_STYLE = {
 # ASS colours are &HBBGGRR — pure red is &H0000FF (blue=00, green=00, red=FF).
 PINNED_EMPHASIS_COLOUR = "&H0000FF&"
 
+# The trailing comment-bait question overlay — bottom-center (distinct from
+# pinned_line's top-center) so the two never collide when both are present,
+# and only shown for the last COMMENT_BAIT_TRAILING_SECONDS of the clip.
+COMMENT_BAIT_STYLE = {
+    "fontname": "Helvetica Neue",
+    "fontsize": 26,
+    "primary_colour": "&H00FFFFFF",
+    "secondary_colour": "&H00FFFFFF",
+    "outline_colour": "&H00000000",
+    "back_colour": "&H80000000",
+    "bold": -1,
+    "outline": 3,
+    "shadow": 0,
+    "alignment": 2,   # bottom-center
+    "margin_v": 140,
+}
+COMMENT_BAIT_TRAILING_SECONDS = 2.5
+
 DEFAULT_PRESET = "bold-white"
 EMPHASIS_SCALE = 130  # % font scale for emphasis words
 EMPHASIS_COLOUR = "&H0000FFFF"  # yellow pop, overridden per preset if it matches primary
@@ -283,13 +301,19 @@ def generate_static_overlay_ass(
     pinned_line_emphasis: list[str],
     duration: float,
     style: dict = PINNED_LINE_STYLE,
+    start: float = 0.0,
 ) -> str:
-    """Build a standalone ASS file with ONE static dialogue line spanning the
-    full clip [0, duration) — the single strongest verbatim line, pinned at
-    the top of frame for the whole clip. Unlike generate_ass's word-by-word
-    karaoke reveal, this line is fully visible throughout; only the emphasis
-    keywords are visually distinguished, via a red colour override instead
-    of a reveal effect."""
+    """Build a standalone ASS file with ONE static dialogue line spanning
+    [start, duration) — the single strongest verbatim line, pinned at the
+    top of frame, by default for the whole clip (start=0.0). Unlike
+    generate_ass's word-by-word karaoke reveal, this line is fully visible
+    throughout its window; only the emphasis keywords are visually
+    distinguished, via a red colour override instead of a reveal effect.
+
+    start > 0 renders a TRAILING-only window instead (e.g. a comment-bait
+    question shown only for the last few seconds) — the emphasis-colouring
+    logic is identical either way, only the dialogue line's own timing
+    changes."""
     # pinned_line_emphasis may be short phrases, not single words — split
     # into individual tokens for matching, same convention generate_ass uses
     # for emphasis_words.
@@ -309,7 +333,7 @@ def generate_static_overlay_ass(
     text = " ".join(parts)
 
     ass = _build_ass_header(style)
-    ass += f"Dialogue: 0,{_fmt_ass_time(0.0)},{_fmt_ass_time(duration)},Default,,0,0,0,,{text}\n"
+    ass += f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(duration)},Default,,0,0,0,,{text}\n"
     return ass
 
 
@@ -538,6 +562,7 @@ def render_minimal_faith_clip(
     music_path: Optional[str] = None,
     whoosh_path: Optional[str] = None,
     riser_path: Optional[str] = None,
+    comment_bait_question: Optional[str] = None,
     add_captions: bool = True,
 ) -> str:
     """Render the "minimal-faith" deliverable: generate_minimal_faith_ass's
@@ -552,6 +577,10 @@ def render_minimal_faith_clip(
     — callers (main.py) resolve these via music.pick_track()/
     sfx.pick_whoosh()/sfx.pick_riser() before calling, so this function
     itself has no opinion on selection, only mixing.
+
+    comment_bait_question, when given, burns a trailing text overlay (last
+    COMMENT_BAIT_TRAILING_SECONDS) regardless of add_captions — see
+    burn_captions' matching parameter for why it's independent.
 
     add_captions=False skips the karaoke captions, keeping the zoom/grade/
     music/SFX bundle — for callers who'll add their own subtitle template by
@@ -580,6 +609,18 @@ def render_minimal_faith_clip(
         escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
         escaped_fonts_dir = FONTS_DIR.replace(":", "\\:")
         vf.append(f"ass={escaped_ass_path}:fontsdir={escaped_fonts_dir}")
+
+    # Independent of add_captions — see burn_captions' matching comment.
+    if comment_bait_question:
+        bait_ass_path = os.path.join(output_dir, f"{tag}_bait.ass")
+        bait_start = max(0.0, duration - COMMENT_BAIT_TRAILING_SECONDS)
+        bait_ass_content = generate_static_overlay_ass(
+            comment_bait_question, [], duration, style=COMMENT_BAIT_STYLE, start=bait_start,
+        )
+        with open(bait_ass_path, "w", encoding="utf-8") as f:
+            f.write(bait_ass_content)
+        escaped_bait_ass_path = bait_ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        vf.append(f"ass={escaped_bait_ass_path}")
 
     inputs = ["-ss", str(start), "-t", str(duration), "-i", filepath]
     filter_complex = [f"[0:v]{','.join(vf)}[v]"]
@@ -672,6 +713,7 @@ def burn_captions(
     output_dir: str = OUTPUT_DIR,
     pinned_line: Optional[str] = None,
     pinned_line_emphasis: Optional[list[str]] = None,
+    comment_bait_question: Optional[str] = None,
     add_captions: bool = True,
 ) -> str:
     """Trim [start, end) from filepath, burn word-by-word ASS captions, write
@@ -685,9 +727,15 @@ def burn_captions(
     red — rendered as a second chained `ass=` filter stage so it burns in
     alongside the bottom karaoke captions in the same ffmpeg pass.
 
-    add_captions=False skips both the karaoke captions and pinned_line
-    entirely, producing just the reframed clip — for callers who'll add
-    their own subtitle template by hand in Resolve instead.
+    comment_bait_question, when given, adds a third static overlay — a short
+    question shown only for the last COMMENT_BAIT_TRAILING_SECONDS, bottom-
+    center (distinct from pinned_line's top-center) so the two never
+    collide even if both are present.
+
+    add_captions=False skips karaoke captions, pinned_line, and
+    comment_bait_question entirely, producing just the reframed clip — for
+    callers who'll add their own subtitle template by hand in Resolve
+    instead.
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -701,32 +749,43 @@ def burn_captions(
     crop = "crop=ih*9/16:ih:(iw-ih*9/16)/2:0"
     scale = f"scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}"
 
-    if not add_captions:
-        vf = f"{crop},{scale}"
-    else:
+    def _escape_ass_path(p: str) -> str:
+        return p.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+    # comment_bait_question is independent of add_captions — it's a separate
+    # editorial layer (see main.py's ClipSelection.comment_bait), not part of
+    # the karaoke/pinned-line caption bundle, so it still renders even when
+    # add_captions=False (the pipeline's current default everywhere).
+    ass_stages = []
+    if add_captions:
         ass_path = os.path.join(output_dir, f"{tag}.ass")
         ass_content = generate_ass(segments, start, end, emphasis_words, preset_name)
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(ass_content)
+        ass_stages.append(f"ass={_escape_ass_path(ass_path)}")
 
-        # ass_path may contain characters ffmpeg's filtergraph parser treats specially;
-        # escape for use inside the -vf/-filter_complex ass=... argument.
-        escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-
-        ass_filters = f"ass={escaped_ass_path}"
         if pinned_line:
             pinned_ass_path = os.path.join(output_dir, f"{tag}_pinned.ass")
             pinned_ass_content = generate_static_overlay_ass(pinned_line, pinned_line_emphasis or [], duration)
             with open(pinned_ass_path, "w", encoding="utf-8") as f:
                 f.write(pinned_ass_content)
-            escaped_pinned_ass_path = pinned_ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
             # Chaining a second `ass=` stage burns it in on top of whatever the
             # first stage already rendered — the two files use disjoint screen
             # regions (top-pinned vs. bottom karaoke) so there's no visual
             # conflict, and this avoids merging two style blocks into one file.
-            ass_filters += f",ass={escaped_pinned_ass_path}"
+            ass_stages.append(f"ass={_escape_ass_path(pinned_ass_path)}")
 
-        vf = f"{crop},{scale},{ass_filters}"
+    if comment_bait_question:
+        bait_ass_path = os.path.join(output_dir, f"{tag}_bait.ass")
+        bait_start = max(0.0, duration - COMMENT_BAIT_TRAILING_SECONDS)
+        bait_ass_content = generate_static_overlay_ass(
+            comment_bait_question, [], duration, style=COMMENT_BAIT_STYLE, start=bait_start,
+        )
+        with open(bait_ass_path, "w", encoding="utf-8") as f:
+            f.write(bait_ass_content)
+        ass_stages.append(f"ass={_escape_ass_path(bait_ass_path)}")
+
+    vf = f"{crop},{scale}," + ",".join(ass_stages) if ass_stages else f"{crop},{scale}"
 
     cmd = [
         "ffmpeg", "-y",
