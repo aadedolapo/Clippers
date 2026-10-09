@@ -9,4 +9,6 @@ output/
 *.aiff
 .claude/
 .DS_Store
-.md
+CLAUDE_CODE_TEST_RUN.md
+RETENTION_UPGRADE_PLAN.md
+prd.md
