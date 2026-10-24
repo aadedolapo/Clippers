@@ -25,6 +25,8 @@ classifiers = [
 ]
 dependencies = [
     "anthropic>=0.122",
+    # faster-whisper 1.2.1 calls av.open(metadata_errors=...), which PyAV 19 removed.
+    "av>=11,<19",
     "elevenlabs>=2.0",
     "fastapi>=0.110",
     "faster-whisper>=1.0",
