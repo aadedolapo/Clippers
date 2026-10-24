@@ -422,7 +422,7 @@
   <div class="row">
     <input type="file" id="local-file-input" accept="video/*" multiple />
     <input type="text" id="local-title-input" placeholder="Title (optional, single file only)" style="flex: 0 0 220px;" />
-    <input type="text" id="local-source-input" placeholder="Church/speaker (optional, single file only)" style="flex: 0 0 220px;" />
+    <input type="text" id="local-source-input" placeholder="Source / speaker (optional, single file only)" style="flex: 0 0 220px;" />
     <label class="clip-style-checkbox" title="Look for 45-90s story clips instead of Shorts-length ones"><input type="checkbox" id="long-form-input" /> Long-form clips</label>
     <button id="analyze-btn">Analyze</button>
   </div>
@@ -539,7 +539,7 @@ function createSession(name, insertAt) {
   // The analysis job this session is showing, so a failed one can be retried.
   let jobId = null;
 
-  // PRD §14 compliance layer: always renders as a warning until a human
+  // Compliance layer: always renders as a warning until a human
   // explicitly clicks it to mark the source cleared — the system itself
   // never sets this to "cleared".
   function setComplianceStatus(status) {
@@ -640,7 +640,7 @@ function createSession(name, insertAt) {
           </div>` : ""}
           <label class="clip-commentary-label">
             <input type="checkbox" class="clip-commentary-checkbox" />
-            Add Wisement outro
+            Add spoken outro
           </label>
           <div class="clip-style-controls">
             <label class="clip-style-select-label">
@@ -1098,7 +1098,7 @@ function analyze() {
   localSourceInput.value = "";
 }
 
-// "Today's picks" (retention upgrade plan phase 4): the day's actual best
+// "Today's picks": the day's actual best
 // 1-2 clips ranked across every video analyzed that day, not a per-video
 // top N — reusing the same /send-to-resolve endpoint each session's own
 // send button uses.
@@ -1185,7 +1185,7 @@ shortlistDateInput.value = todayLocalDateStr();
 shortlistRefreshBtn.addEventListener("click", loadShortlist);
 shortlistDateInput.addEventListener("change", loadShortlist);
 
-// Performance CSV import (retention upgrade plan phase 5): a YouTube
+// Performance CSV import: a YouTube
 // Studio Shorts export, matched server-side to already-posted clips.
 const performanceCsvInput = document.getElementById("performance-csv-input");
 const performanceCsvResult = document.getElementById("performance-csv-result");

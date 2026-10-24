@@ -1,5 +1,5 @@
 """
-Performance log and feedback loop (retention upgrade plan phase 5): a
+Performance log and feedback loop: a
 durable record of how each posted clip actually did, so llm_scoring.py can
 eventually learn what THIS channel's audience holds for instead of relying
 only on generic retention heuristics. File-backed, matching storage.py's

@@ -1,5 +1,5 @@
 """
-FastAPI wrapper around the pipeline (PRD section 8): /analyze, /send-to-resolve,
+FastAPI wrapper around the pipeline: /analyze, /send-to-resolve,
 /status/{job_id}. Job state lives in memory and is mirrored to one JSON file
 per job (jobs_store.py), so finished jobs survive a restart. Single user,
 localhost.
@@ -85,9 +85,8 @@ class AnalyzeRequest(BaseModel):
     url: Optional[str] = None
     local_file: Optional[str] = None
     title: Optional[str] = None
-    # Church/speaker attribution — not required to find clips, but logged
-    # per video for future permission outreach and claim tracing (PRD
-    # pipeline step 6).
+    # Source/speaker attribution — not required to find clips, but logged
+    # per video for future permission outreach and claim tracing.
     source: Optional[str] = None
     # Look for longer story clips (llm_scoring.LONG, 45-90s by default)
     # instead of Shorts-length ones.
@@ -120,10 +119,9 @@ class ClipSelection(BaseModel):
     # "no beat plan requested for this clip," not an error.
     beat_plan: list[BeatPlanItem] = []
     # Per-clip on/off toggle for the cold open a clip may have — defaults to
-    # on when the clip has one, since the retention upgrade is opt-out, not
-    # opt-in (the plan's UI is a checkbox to turn it OFF, not on).
+    # on when the clip has one: the checkbox turns it off, not on.
     use_cold_open: bool = True
-    # Add a spoken Wisement outro (retention upgrade plan phase 6) — opt-in,
+    # Add a spoken outro — opt-in,
     # since it's a new editorial layer, not a bug-fix default like
     # use_cold_open. Intro is deliberately not offered: anything before the
     # hook hurts retention, so only the outro is ever wired in.
@@ -133,7 +131,7 @@ class ClipSelection(BaseModel):
     # even when with_commentary is also on (both reuse the same
     # commentary.py call; see send_to_resolve).
     comment_bait: bool = False
-    # "Minimal Faith" style (retention upgrade plan phase 7) — the new
+    # "Minimal Faith" style — the new
     # default caption preset. use_cold_open is silently skipped for this
     # preset: it renders via its own effects pipeline (zoom/grade/music),
     # which doesn't have a cold-open crossfade path built for it yet.
@@ -142,7 +140,7 @@ class ClipSelection(BaseModel):
     bw_grade: bool = False
     music_bed: bool = False
     music_mood: Literal["slow", "cinematic"] = "slow"
-    # Burn captions into the output/ mp4 (improvement plan #6). Off by
+    # Burn captions into the output/ mp4. Off by
     # default; the Resolve timeline never gets burned-in captions either
     # way, so native subtitles there still work.
     burn_captions: bool = False
@@ -478,7 +476,7 @@ async def import_performance_csv(file: UploadFile = File(...)):
 
 @app.post("/copyright-status/{video_id}")
 def update_copyright_status(video_id: str, req: CopyrightStatusRequest):
-    """PRD §14 compliance layer: a human explicitly marking a source cleared
+    """Compliance layer: a human explicitly marking a source cleared
     (or reverting it to unknown) — the system never sets this to "cleared"
     on its own."""
     try:
@@ -549,7 +547,7 @@ def send_to_resolve(req: SendToResolveRequest):
                 except Exception:
                     logger.exception(f"B-roll download failed for {sel.preview_url}")
 
-            # Wisement outro (phase 6): rendered once up front so the same
+            # Spoken outro (phase 6): rendered once up front so the same
             # file can both be appended to the Resolve timeline (which
             # references it by path, so it must outlive this request) and
             # concatenated into the standalone deliverable mp4 below —
@@ -747,7 +745,7 @@ class SuggestBrollRequest(BaseModel):
 
 @app.post("/broll/{video_id}/{clip_index}")
 def suggest_broll(video_id: str, clip_index: int, req: SuggestBrollRequest = SuggestBrollRequest()):
-    """PRD §7-8 B-roll engine, on demand per clip — this isn't run
+    """B-roll engine, on demand per clip — this isn't run
     automatically for every clip during /analyze, since each call is a
     Claude call (query generation) on top of several Pexels searches."""
     job = _find_job_by_video_id(video_id)

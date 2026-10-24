@@ -1,5 +1,5 @@
 """
-Shot-boundary detection and snapping (improvement plan #2). Clip boundaries
+Shot-boundary detection and snapping. Clip boundaries
 otherwise only snap to transcript segments, so a clip can open a frame or
 two before a hard cut: a flash of the previous shot as the very first
 frame, which is the frame that decides whether someone swipes away.

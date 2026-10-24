@@ -18,7 +18,7 @@ STORE_PATH = os.path.join(DATA_DIR, "saved_clips.json")
 
 _LOCK = threading.Lock()
 
-# PRD §14: every source gets a compliance status, and it must default to a
+# Every source gets a compliance status, and it must default to a
 # warning rather than a false "safe to publish" — adding commentary doesn't
 # by itself resolve copyright. Only a human toggling it via
 # set_copyright_status ever moves it off this default.
@@ -27,7 +27,7 @@ DEFAULT_COPYRIGHT_STATUS = "unknown"
 
 def save_session(video_id: str, title: str, clips: list[dict], source: Optional[str] = None) -> str:
     """Persist (overwrite) the clip list for a video, keyed by video_id.
-    `source` (church/speaker) is logged for future permission outreach and
+    `source` (where the video is from, or the speaker) is logged for future permission outreach and
     claim tracing — informational only, not required. Returns the session's
     copyright_status: carried forward from a prior save (so re-analyzing a
     video doesn't quietly reset a status a human already cleared), else
@@ -69,8 +69,7 @@ def load_sessions() -> list[dict]:
 
 def load_sessions_for_date(date_str: str) -> list[dict]:
     """Sessions whose saved_at falls on the given local calendar date
-    (YYYY-MM-DD) — the daily shortlist's candidate pool (retention upgrade
-    plan phase 4). Uses the machine's local timezone, matching a single-user
+    (YYYY-MM-DD) — the daily shortlist's candidate pool. Uses the machine's local timezone, matching a single-user
     localhost tool's "today" rather than UTC's."""
     return [s for s in load_sessions() if datetime.fromtimestamp(s["saved_at"]).date().isoformat() == date_str]
 

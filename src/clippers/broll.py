@@ -1,12 +1,12 @@
 """
-B-roll engine (PRD sections 7-8): for each clip, turn its script into concrete
+B-roll engine: for each clip, turn its script into concrete
 visual search queries (never the raw sentence — see QUERY_SYSTEM_PROMPT), then
 search Pexels for stock footage and take its top-ranked result per query.
 
 Requires PEXELS_API_KEY in your .env. Nothing here downloads footage into a
 render automatically — it returns picks (source link + query) for a human to
-review, matching the rest of this project's "human always approves" posture
-(PRD section 13). Called on-demand per clip, not automatically during
+review, matching the rest of this project's "human always approves" posture.
+Called on-demand per clip, not automatically during
 /analyze — each call still runs one Claude call for query generation, so
 it isn't free to run unprompted for every candidate clip.
 """
@@ -61,7 +61,7 @@ def _strip_json_fence(raw: str) -> str:
 
 
 def generate_broll_queries(clip_text: str, core_idea: str = "", n: int = DEFAULT_QUERIES_PER_CLIP) -> list[dict]:
-    """PRD §8: turn a clip's script into concrete visual search queries
+    """Turn a clip's script into concrete visual search queries
     instead of searching the sentence verbatim. Returns a list of
     {"query": str, "quote": str} — `quote` is the transcript excerpt that
     inspired the query, used by locate_quote_offset to time the cutaway."""

@@ -1,5 +1,5 @@
 """
-Audio energy analysis (PRD section 4B): RMS energy + onset/beat spikes as a
+Audio energy analysis: RMS energy + onset/beat spikes as a
 secondary, cheap signal that correlates with laughs, reactions, punchlines.
 """
 

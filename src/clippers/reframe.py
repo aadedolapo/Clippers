@@ -1,5 +1,5 @@
 """
-Speaker-following crop for the ffmpeg render (improvement plan #1). The
+Speaker-following crop for the ffmpeg render. The
 rendered mp4 used a fixed center crop, so an off-center or walking speaker
 got cut out of frame. This samples the clip at a few fps, finds faces, picks
 the one to follow, smooths that into a camera path, and hands ffmpeg a

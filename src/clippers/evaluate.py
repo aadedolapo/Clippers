@@ -1,5 +1,5 @@
 """
-Score-vs-retention eval (improvement plan #7): does the scorer rank the
+Score-vs-retention eval: does the scorer rank the
 clips that actually held viewers higher? Run it before and after any change
 to scoring.WEIGHTS or the scoring prompt.
 

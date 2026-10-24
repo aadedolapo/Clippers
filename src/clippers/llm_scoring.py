@@ -1,5 +1,5 @@
 """
-LLM scoring pass (PRD section 4A + 6.2): chunk the transcript into sliding
+LLM scoring pass: chunk the transcript into sliding
 candidate windows, ask Claude to score each 0-10 as a standalone short clip
 and flag emphasis words for captioning, batching several windows into each
 API call.
@@ -14,7 +14,7 @@ from typing import Optional
 import numpy as np
 from anthropic import Anthropic
 
-from clippers import diarize, performance
+from clippers import channel, diarize, performance
 from clippers.audio_energy import window_energy_score
 
 MODEL = os.environ.get("CLAUDE_SCORING_MODEL", "claude-sonnet-5")
@@ -25,7 +25,7 @@ SCORING_BATCH_SIZE = int(os.environ.get("SCORING_BATCH_SIZE", "4"))
 @dataclass(frozen=True)
 class ClipLength:
     """Allowed clip duration (hard bounds) and the range the prompt asks
-    the model to aim for (improvement plan #8)."""
+    the model to aim for."""
     min_s: float
     max_s: float
     target_min_s: float
@@ -60,7 +60,8 @@ LONG = ClipLength(
 
 SYSTEM_PROMPT = """You evaluate excerpts from a longer video transcript for their \
 potential as standalone short-form clips (YouTube Shorts / Reels / TikTok), and \
-choose the best clip boundary within each excerpt rather than using the whole thing.
+choose the best clip boundary within each excerpt rather than using the whole thing. \
+The clips are for {channel}.
 
 You will be given several independent candidate WINDOWS from the same video, each \
 labeled "Window N" with its own NUMBERED list of transcript segments (with time \
@@ -113,8 +114,7 @@ scroll
 rest of the video
   - "payoff": integer 0-10, strength of the punchline, payoff, or surprising claim
   - "lane_fit": integer 0-10, how well the clip fits the channel's lanes (see below)
-  - "lane": one of "faith", "mens_growth", "discipline", "purpose", "relationships", \
-"other"
+  - {lane_field}
   - "loopability": integer 0-10, how naturally the clip's last line flows back into \
 its first line, high if it could seamlessly re-loop
   - "overall": integer 0-10, overall quality of the clip as a standalone short
@@ -162,19 +162,18 @@ Scorecard rules:
 - hook_pass = false if the first line starts mid-thought ("So the…", "And that's \
 why…", "Yeah."), needs earlier context to make sense, is filler or a greeting, or \
 makes no claim and creates no tension. A pass looks like a direct claim, a question, \
-a number, or something said straight to the viewer ("Most men never…", "God will \
-not…", "You're not lazy, you're…").
-- Lane: the channel's core lanes are faith, men's growth, discipline, and purpose. \
-Topics outside these (tech, celebrity gossip, generic social-media stats) score low \
-on lane_fit even if the clip is otherwise strong.
+a number, or something said straight to the viewer ("Most people never…", "Nobody \
+tells you…", "You're not lazy, you're…").
+- {lane_rule}
 - Loopability: score high when the last line flows naturally back into the first, \
 so the clip could replay seamlessly.
 """
 
 
 def system_prompt(lengths: ClipLength = SHORT) -> str:
-    """SYSTEM_PROMPT with this job's clip lengths filled in. Plain replace,
-    since the prompt's JSON examples contain literal braces."""
+    """SYSTEM_PROMPT with this job's clip lengths and the channel settings
+    filled in. Plain replace, since the prompt's JSON examples contain
+    literal braces."""
     def fmt(v: float) -> str:
         return f"{v:g}"
 
@@ -182,7 +181,10 @@ def system_prompt(lengths: ClipLength = SHORT) -> str:
             .replace("{target_min}", fmt(lengths.target_min_s))
             .replace("{target_max}", fmt(lengths.target_max_s))
             .replace("{max_s}", fmt(lengths.max_s))
-            .replace("{min_s}", fmt(lengths.min_s)))
+            .replace("{min_s}", fmt(lengths.min_s))
+            .replace("{channel}", channel.describe())
+            .replace("{lane_field}", channel.lane_field())
+            .replace("{lane_rule}", channel.lane_rule()))
 
 
 def build_windows(
@@ -246,7 +248,7 @@ def _chunk(items: list, size: int):
 # too-tight budget causes the response to truncate mid-JSON rather than
 # finish early (confirmed: ~1 in 5 batches truncated at the previous 1024
 # budget once pinned_line/pinned_line_emphasis were added to the schema; the
-# nested "scorecard" object added in the retention upgrade added enough
+# nested "scorecard" object added enough
 # fields that even 2048 started truncating every batch, so this has more
 # headroom than that field count alone would suggest).
 TOKENS_PER_WINDOW = 4096

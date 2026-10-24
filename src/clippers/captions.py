@@ -1,5 +1,5 @@
 """
-ASS caption generation + ffmpeg burn-in (PRD section 6): word-by-word karaoke
+ASS caption generation + ffmpeg burn-in: word-by-word karaoke
 highlight captions, emphasis words visually distinct, swappable style presets.
 """
 
@@ -12,7 +12,7 @@ from clippers import paths, reframe
 
 OUTPUT_DIR = paths.OUTPUT_DIR
 
-# Named style presets (PRD 6.4): font, colors, outline. ASS colors are &HAABBGGRR.
+# Named style presets: font, colors, outline. ASS colors are &HAABBGGRR.
 STYLE_PRESETS = {
     "bold-white": {
         "fontname": "Arial Black",
@@ -124,7 +124,7 @@ PORTRAIT_WIDTH = 1080
 PORTRAIT_HEIGHT = 1920
 STYLE_REFERENCE_HEIGHT = 720
 
-# Render targets (improvement plan #8). Width stays 1080 for all of them, so
+# Render targets. Width stays 1080 for all of them, so
 # caption font sizes (in ASS PlayRes units) keep the same size relative to
 # the frame width; only the canvas height changes.
 ASPECTS = {
@@ -143,12 +143,12 @@ def _aspect_ratio(aspect: str) -> tuple[int, int]:
     w, h = aspect.split(":") if aspect in ASPECTS else DEFAULT_ASPECT.split(":")
     return int(w), int(h)
 
-# "Minimal Faith" style (retention upgrade plan phase 7): phrase-based
-# animated captions + edit effects, ported from the already-tested
-# prototype at _style_test/minimal_faith_test.py rather than reinvented —
-# see generate_minimal_faith_ass and render_minimal_faith_clip below. Not
-# a STYLE_PRESETS entry: it needs phrase grouping and entrance animations,
-# not per-word karaoke, so it gets its own generation path entirely.
+
+
+# "Minimal Faith" style: phrase-based animated captions + edit effects — see
+# generate_minimal_faith_ass and render_minimal_faith_clip below. Not a
+# STYLE_PRESETS entry: it needs phrase grouping and entrance animations, not
+# per-word karaoke, so it gets its own generation path entirely.
 MINIMAL_FAITH_PRESET = "minimal-faith"
 FONTS_DIR = paths.FONTS_DIR
 
@@ -499,16 +499,13 @@ def generate_minimal_faith_ass(
 ) -> str:
     """Build ASS content for the "minimal-faith" style: short animated
     phrases (2-4 words) instead of per-word karaoke, centered lower-middle,
-    with at most one highlighted word per phrase. Ported from
-    _style_test/minimal_faith_test.py's build_ass/phrases/emph_index, but
-    reading word timings directly from the Whisper segments already on hand
-    instead of re-parsing a karaoke .ass file.
+    with at most one highlighted word per phrase, reading word timings
+    directly from the Whisper segments.
 
     capitalize_divine_pronouns: an optional list of already-decided literal
     words (e.g. ["he", "his"]) to force-capitalize wherever they appear as a
     standalone token. The mechanism is wired up here but nothing currently
-    populates this list — RETENTION_UPGRADE_PLAN.md phase 7's "reverence
-    rule" (capitalize He/Him/His when referring to God/Jesus) needs real
+    populates this list — a "reverence rule" (capitalize He/Him/His when referring to God/Jesus) needs real
     language understanding of what each pronoun refers to, not a text
     heuristic, so deciding it was deliberately deferred rather than guessed
     at the risk of mis-capitalizing an unrelated "he"."""

@@ -1,5 +1,5 @@
 """
-DaVinci Resolve integration (PRD section 5). Resolve must already be open
+DaVinci Resolve integration. Resolve must already be open
 with a project loaded on this machine — scripting connects to that instance,
 it does not launch Resolve.
 """
@@ -27,8 +27,7 @@ TIMELINE_HEIGHT = 1920
 
 # How long a B-roll cutaway plays before cutting back to the main clip, when
 # the pick itself doesn't specify a duration (or the source footage is
-# shorter than that). PRD §12's example targets "2-4 B-roll changes" across
-# a short clip, which this default is sized for.
+# shorter than that). Sized for 2-4 B-roll changes across a short clip.
 DEFAULT_BROLL_CUTAWAY_SECONDS = 2.5
 BROLL_TRACK_INDEX = 2
 
