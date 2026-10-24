@@ -1,5 +1,5 @@
 """
-Visual signal in scoring (improvement plan #5). The text scorer only sees
+Visual signal in scoring. The text scorer only sees
 the transcript and loudness, so it can't tell a strong visual moment
 (reaction, gesture, laughter, a crowd) from a static talking head, or spot
 a first frame that's the back of someone's head.

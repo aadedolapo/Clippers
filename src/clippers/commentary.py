@@ -1,9 +1,9 @@
 """
-Content transformation stage (PRD section 6): for each selected clip,
+Content transformation stage: for each selected clip,
 generate the full structured editorial package — a distilled core idea,
 original written commentary, an actionable takeaway, a CTA, and a pair of
 short spoken bookends (intro/close) for narration. Hook already comes out
-of llm_scoring.py; this covers the other four PRD §6 fields plus the
+of llm_scoring.py; this covers the other four fields plus the
 spoken bookend scripts a future TTS/render stage would use.
 
 The written "commentary" field is also the substance that makes a reused-
@@ -21,10 +21,12 @@ from typing import Optional
 
 from anthropic import Anthropic
 
+from clippers import channel
+
 MODEL = os.environ.get("CLAUDE_COMMENTARY_MODEL", "claude-sonnet-5")
 
 SYSTEM_PROMPT = """You produce the structured editorial package that turns a raw \
-sermon/talk clip into a short-form post on a curated Christian commentary channel: a \
+talk clip into a short-form post on {channel}: a \
 distilled core idea, original written commentary, an actionable takeaway, a \
 call-to-action, and a pair of short spoken bookends for narration.
 
@@ -64,7 +66,7 @@ you?"), never a yes/no question or a restatement of the takeaway/cta
 Vary your angle across the clips you're given; do not reuse the same structure, opening \
 phrase, or format twice in this batch. Draw from different approaches as appropriate to \
 each clip's content, for example:
-- a related historical or theological detail the clip doesn't mention
+- a related historical, cultural or theological detail the clip doesn't mention
 - a pointed question the clip's content raises
 - a brief personal or contemporary application
 - a respectful counterpoint or complication
@@ -90,7 +92,7 @@ def generate_commentary_for_clips(
     video_title: str,
     source: Optional[str] = None,
 ) -> list[dict]:
-    """Generate the full PRD §6 content-transformation package for each
+    """Generate the full content-transformation package for each
     already-selected clip in one batched call. Returns a list the same
     length/order as `clips`, each item {"core_idea", "commentary",
     "takeaway", "cta", "commentary_intro", "commentary_close",
@@ -121,7 +123,7 @@ def generate_commentary_for_clips(
         # instead of two.
         max_tokens=max(4096, 1536 * len(clips)),
         output_config={"effort": "low"},
-        system=SYSTEM_PROMPT,
+        system=SYSTEM_PROMPT.replace("{channel}", channel.describe("a curated commentary channel")),
         messages=[{"role": "user", "content": prompt}],
     )
     text_block = next((b for b in message.content if b.type == "text"), None)

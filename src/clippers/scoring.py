@@ -1,6 +1,6 @@
 """
 Combine the LLM scoring pass and audio energy pass into a final ranked,
-non-overlapping list of candidate clips (PRD section 4, "Combine").
+non-overlapping list of candidate clips.
 """
 
 from typing import Optional
@@ -9,14 +9,14 @@ from clippers import shots, visual_rerank
 from clippers.audio_energy import analyze_energy, window_energy_score
 from clippers.llm_scoring import SHORT, ClipLength, score_all_windows
 
-# Retention-focused combined score (retention upgrade plan, phase 2): the
+# Retention-focused combined score: the
 # hook is weighted highest since a weak first line loses the viewer before
 # anything else about the clip matters. Audio energy (originally 30%) is
 # nearly dropped — loudness doesn't predict retention the way a strong hook
 # does. Weights sum to 1.0; each subterm is normalized to 0-1 before
 # weighting (the 0-10 LLM scorecard fields divided by 10, hook_pass treated
 # as 10/10 or 0/10, audio_score already 0-1) so combined_score lands in 0-1.
-# "visual" (improvement plan #5) is the visual rerank's 0-1 score; the other
+# "visual" is the visual rerank's 0-1 score; the other
 # weights were scaled by 0.9 to make room for it. Check any change here with
 # `python eval/run_eval.py --weights-only` before trusting it.
 WEIGHTS = {

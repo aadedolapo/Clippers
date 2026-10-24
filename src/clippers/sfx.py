@@ -1,9 +1,7 @@
 """
-Sound-effect selection (retention upgrade plan phase 7): index Dolapo's
-DaVinci Resolve Sound Library folder on disk (found via mdfind + confirmed
-with Dolapo — a personal collection of Epidemic Sound / Cinematic Sound
-Library / Invention SFX packs, indexed by Resolve's Sound Library panel in
-"Local Database" mode) into whoosh/riser/impact buckets by filename, so a
+Sound-effect selection: index a folder of sound effects (SFX_DIR, e.g. a
+DaVinci Resolve Sound Library folder of Epidemic Sound or similar packs)
+into whoosh/riser/impact buckets by filename, so a
 clip render can grab a soft whoosh for the zoom-out and, optionally, a
 riser for the payoff line.
 """

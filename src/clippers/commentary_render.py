@@ -142,8 +142,8 @@ def concat_segments(paths: list[str], out_path: str) -> str:
 
 def concat_with_crossfade(path_a: str, path_b: str, out_path: str, crossfade: float = 0.15) -> str:
     """Join two mp4s with a short synchronized audio+video crossfade, instead
-    of concat_segments' hard cut — used for the cold-open "flash-forward"
-    (retention upgrade plan phase 3), where a jarring hard cut back into
+    of concat_segments' hard cut — used for the cold-open "flash-forward",
+    where a jarring hard cut back into
     material the viewer may have just heard would undercut the effect.
     xfade/acrossfade (rather than the concat filter) keep video and audio in
     sync through the transition: both produce an output of duration

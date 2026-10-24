@@ -1,5 +1,5 @@
 """
-Speaker diarization (improvement plan #3): who is talking when. faster-
+Speaker diarization: who is talking when. faster-
 whisper only gives words and times, so with a podcast or interview the crop
 can't follow the speaker and the scorer can't tell who said what.
 

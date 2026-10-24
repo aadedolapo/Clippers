@@ -1,5 +1,5 @@
 """
-Music bed selection (retention upgrade plan phase 7): pick a royalty-free
+Music bed selection: pick a royalty-free
 track by mood from the user's own local library, avoiding recent repeats.
 """
 
