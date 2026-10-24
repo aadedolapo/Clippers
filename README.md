@@ -109,6 +109,14 @@ That one command runs everything. Leave the terminal open while you work, and pr
 | `clippers report` | Posted-clip performance by lane, duration and cold open |
 | `clippers eval` | Score-vs-retention eval (see [Measuring the scorer](#-measuring-the-scorer)) |
 
+### Updating
+
+```bash
+pipx reinstall --python 3.13 --fetch-missing-python clippers
+```
+
+This installs the latest version from GitHub. Keep the `--python 3.13` part: without it pipx uses your default Python, which may be too new. Your settings, clips and history in `~/Clippers` aren't touched.
+
 ---
 
 ## 🧭 How it works
