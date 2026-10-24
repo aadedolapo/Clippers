@@ -6,7 +6,7 @@
 
 Clippers finds the moments in a talk, sermon, podcast or interview that work on their own as a short clip. It ranks them on hook, payoff, loudness and visuals, re-cuts them so they open clean, and frames the speaker in 9:16. Your picks land in DaVinci Resolve as a timeline that's ready to edit.
 
-![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/python-3.9%E2%80%933.13-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-backend-009688?logo=fastapi&logoColor=white)
 ![Claude](https://img.shields.io/badge/Claude-Opus%205.5%20%C2%B7%20Sonnet%205-D97757?logo=anthropic&logoColor=white)
 ![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-scripting%20API-233A51)
@@ -44,7 +44,7 @@ Clippers finds the moments in a talk, sermon, podcast or interview that work on 
 
 | | |
 |---|---|
-| 🐍 **Python 3.9+** | |
+| 🐍 **Python 3.9–3.13** | pipx can fetch 3.13 for you (see Install) |
 | 🎞️ **[ffmpeg](https://ffmpeg.org/)** | on your `PATH` |
 | 🎬 **DaVinci Resolve** *(optional)* | open **with a project loaded**. Studio adds AI Smart Reframe; the free version gets a static pan instead. Without Resolve you get the mp4s only. |
 | 🔑 **[Anthropic API key](https://console.anthropic.com/)** | for scoring and the visual rerank |
@@ -53,13 +53,15 @@ Clippers finds the moments in a talk, sermon, podcast or interview that work on 
 ### Install
 
 ```bash
-pipx install git+https://github.com/aadedolapo/Clippers.git
+pipx install --python 3.13 --fetch-missing-python git+https://github.com/aadedolapo/Clippers.git
 ```
 
-[pipx](https://pipx.pypa.io/) installs it in its own environment and puts the `clippers` command on your path. Plain `pip install git+https://github.com/aadedolapo/Clippers.git` inside a virtual environment works too. For speaker diarization, add the extra (it pulls in PyTorch, several GB):
+[pipx](https://pipx.pypa.io/) (`brew install pipx` on macOS) installs Clippers in its own environment and puts the `clippers` command on your path. Clippers runs on **Python 3.9–3.13**: the transcription engine doesn't support newer versions yet. `--python 3.13 --fetch-missing-python` makes pipx use 3.13, downloading it if you don't have it, even when your default Python is newer.
+
+For speaker diarization, add the extra (it pulls in PyTorch, several GB):
 
 ```bash
-pipx install "clippers[diarization] @ git+https://github.com/aadedolapo/Clippers.git"
+pipx install --python 3.13 --fetch-missing-python "clippers[diarization] @ git+https://github.com/aadedolapo/Clippers.git"
 ```
 
 ### Set up
@@ -185,7 +187,7 @@ In Resolve, **Studio** uses Smart Reframe. **Free** Resolve gets a static pan to
 If you add a Hugging Face token, pyannote labels who says what. The scorer sees lines like `(SPEAKER_01)`. When two people are on screen, the crop follows whoever is talking, chosen by mouth movement.
 
 1. Accept the model terms for [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0).
-2. Install the extra: `pipx install "clippers[diarization] @ git+https://github.com/aadedolapo/Clippers.git"` (or `pip install -e ".[diarization]"` in a checkout).
+2. Install the extra: `pipx install --python 3.13 --fetch-missing-python "clippers[diarization] @ git+https://github.com/aadedolapo/Clippers.git"` (or `pip install -e ".[diarization]"` in a checkout).
 3. Set `HF_TOKEN=` in `~/Clippers/.env`.
 
 It's slow on CPU: several minutes per hour of audio. Results are cached as `<video>.diarization.json`. Without a token, everything runs exactly as before.
@@ -390,7 +392,7 @@ The page talks to these endpoints, so you can script against them too.
 
 ```bash
 git clone https://github.com/aadedolapo/Clippers.git && cd Clippers
-python3 -m venv venv && source venv/bin/activate
+python3.13 -m venv venv && source venv/bin/activate   # any Python 3.9–3.13
 pip install -e ".[dev]"
 ruff check src tests && pytest
 ```
