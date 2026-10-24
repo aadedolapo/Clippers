@@ -3,13 +3,36 @@ Audio energy analysis: RMS energy + onset/beat spikes as a
 secondary, cheap signal that correlates with laughs, reactions, punchlines.
 """
 
+import subprocess
+
 import librosa
 import numpy as np
 
 
+def _sample_rate(path: str) -> int:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate",
+         "-of", "csv=p=0", path],
+        capture_output=True, text=True, check=True,
+    )
+    return int(out.stdout.strip().splitlines()[0])
+
+
+def load_audio(path: str) -> tuple[np.ndarray, int]:
+    """Mono float32 samples at the file's own sample rate, decoded by ffmpeg.
+    librosa.load can't be used for this: since librosa 1.0 it only reads
+    what soundfile can (wav, flac, ogg...), not the audio in an mp4."""
+    sr = _sample_rate(path)
+    out = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", path, "-vn", "-ac", "1", "-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"],
+        capture_output=True, check=True,
+    )
+    return np.frombuffer(out.stdout, dtype=np.float32), sr
+
+
 def analyze_energy(audio_path: str, hop_length: int = 512) -> dict:
     """Load audio and compute a per-frame energy signal plus onset strength."""
-    y, sr = librosa.load(audio_path, sr=None, mono=True)
+    y, sr = load_audio(audio_path)
 
     rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
     onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
