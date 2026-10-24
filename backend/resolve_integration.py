@@ -9,9 +9,10 @@ import os
 import platform
 import re
 import sys
-from typing import Optional
+from typing import Callable, Optional
 
 import captions
+import reframe
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,12 @@ BROLL_TRACK_INDEX = 2
 # clip's own synced audio.
 MUSIC_TRACK_INDEX = 2
 WHOOSH_TRACK_INDEX = 3
+
+
+class ResolveUnavailable(RuntimeError):
+    """Resolve isn't reachable at all (not installed, not running, external
+    scripting off, or no project open), as opposed to one clip failing.
+    Callers use it to skip Resolve and still render the mp4."""
 
 
 def _setup_resolve_env() -> None:
@@ -94,7 +101,7 @@ def _get_resolve():
     try:
         import DaVinciResolveScript as dvr_script
     except ImportError as exc:
-        raise RuntimeError(
+        raise ResolveUnavailable(
             "Could not import DaVinciResolveScript. "
             "Check the Resolve scripting installation."
         ) from exc
@@ -124,14 +131,14 @@ def _get_resolve():
                     break
 
     if resolve is None:
-        raise RuntimeError(
+        raise ResolveUnavailable(
             "Could not connect to DaVinci Resolve. "
             "Resolve scripting is enabled, but no reachable Resolve "
             "instance was found."
         )
 
     if not callable(getattr(resolve, "GetProjectManager", None)):
-        raise RuntimeError(
+        raise ResolveUnavailable(
             "Connected to Resolve, but the scripting API is invalid."
         )
 
@@ -139,12 +146,18 @@ def _get_resolve():
     return _resolve
 
 def _get_project():
-    global _current_project_name
-    resolve = _get_resolve()
-    project_manager = resolve.GetProjectManager()
+    global _current_project_name, _resolve
+    project_manager = _get_resolve().GetProjectManager()
+    if project_manager is None:
+        # The cached connection went stale (Resolve was closed or restarted
+        # since the last send): reconnect once.
+        _resolve = None
+        project_manager = _get_resolve().GetProjectManager()
+        if project_manager is None:
+            raise ResolveUnavailable("Lost the connection to DaVinci Resolve.")
     project = project_manager.GetCurrentProject()
     if project is None:
-        raise RuntimeError("No project open in DaVinci Resolve.")
+        raise ResolveUnavailable("No project open in DaVinci Resolve.")
 
     # Media pool items and timeline objects are tied to the project they came
     # from; if the user switches the active project in Resolve's GUI between
@@ -258,7 +271,7 @@ def _apply_fill_zoom(timeline_item, media_pool_item, timeline, framing: str = "f
     return zoom
 
 
-def _apply_smart_reframe(timeline_item, zoom: float) -> None:
+def _apply_smart_reframe(timeline_item, zoom: float) -> bool:
     """Track the on-screen subject (e.g. a speaker moving on stage) and
     keyframe the clip's position to follow them, instead of leaving it at a
     static fill-crop offset. Only meaningful when a fill-crop is actually
@@ -269,13 +282,37 @@ def _apply_smart_reframe(timeline_item, zoom: float) -> None:
     GetProperty (same opacity to the scripting API as manually-applied GUI
     templates — confirmed by direct testing), so this can't be verified or
     adjusted after the fact, only triggered. Never raise — this is a bonus
-    on top of the static fill-zoom, which remains the fallback framing."""
+    on top of the static fill-zoom, which remains the fallback framing.
+
+    Returns whether Resolve reported success (free Resolve doesn't have
+    Smart Reframe, so this is False there)."""
     if zoom <= 1.0:
-        return
+        return False
     try:
-        timeline_item.SmartReframe()
+        return bool(timeline_item.SmartReframe())
     except Exception:
-        pass
+        return False
+
+
+def _apply_static_pan(timeline_item, timeline, zoom: float, face: Optional[tuple]) -> None:
+    """Free-Resolve stand-in for Smart Reframe: pan the fill-cropped clip so
+    the speaker's median position (reframe.median_face_offset) sits in the
+    middle of the frame. Static, because the scripting API can set a
+    property but not keyframe it, so it can't follow movement the way the
+    rendered mp4's crop does. Clamped so the frame edge never shows."""
+    if zoom <= 1.0 or face is None:
+        return
+    median_cx, src_w, src_h = face
+    tl_w = float(timeline.GetSetting("timelineResolutionWidth"))
+    tl_h = float(timeline.GetSetting("timelineResolutionHeight"))
+    scale = max(tl_w / src_w, tl_h / src_h)
+    max_pan = max(0.0, (src_w * scale - tl_w) / 2)
+    pan = -(median_cx - src_w / 2) * scale
+    pan = min(max(pan, -max_pan), max_pan)
+    try:
+        timeline_item.SetProperty("Pan", pan)
+    except Exception:
+        logger.exception("setting static Pan failed")
 
 
 def _append_clip(
@@ -285,6 +322,7 @@ def _append_clip(
     start_frame: Optional[int] = None,
     end_frame: Optional[int] = None,
     framing: str = "fill",
+    face_hint: Optional[Callable[[], Optional[tuple]]] = None,
 ) -> None:
     """Append one item to the current timeline — the current end of the
     timeline, since Resolve's AppendToTimeline always adds after whatever
@@ -321,8 +359,14 @@ def _append_clip(
         raise RuntimeError("Resolve failed to append a clip to the timeline")
 
     zoom = _apply_fill_zoom(result[0], media_pool_item, timeline, framing=framing)
-    _apply_smart_reframe(result[0], zoom)
+    if not _apply_smart_reframe(result[0], zoom) and face_hint is not None:
+        _apply_static_pan(result[0], timeline, zoom, face_hint())
     return result[0]
+
+
+def _face_hint(filepath: str, start: float, end: float) -> Callable[[], Optional[tuple]]:
+    """Deferred, so face detection only runs when Smart Reframe failed."""
+    return lambda: reframe.median_face_offset(filepath, start, end)
 
 
 def _insert_broll_overlay(
@@ -375,6 +419,14 @@ def _insert_audio_overlay(
         raise RuntimeError("Resolve failed to insert an audio overlay clip")
 
 
+def _ensure_audio_tracks(timeline, count: int) -> None:
+    """Add audio tracks until there are at least `count`. With the music bed
+    off, the whoosh still goes on track 3, so track 2 has to exist too."""
+    while timeline.GetTrackCount("audio") < count:
+        if not timeline.AddTrack("audio"):
+            raise RuntimeError("Resolve failed to add an audio track")
+
+
 def _add_music_and_whoosh(
     media_pool,
     timeline,
@@ -401,8 +453,7 @@ def _add_music_and_whoosh(
 
     if music_path and os.path.exists(music_path):
         try:
-            if timeline.GetTrackCount("audio") < MUSIC_TRACK_INDEX:
-                timeline.AddTrack("audio")
+            _ensure_audio_tracks(timeline, MUSIC_TRACK_INDEX)
             music_item = _import_media(media_pool, music_path)
             start_frame = round(captions.MINIMAL_FAITH_MUSIC_OFFSET * fps)
             end_frame = start_frame + max(0, round(duration * fps) - 1)
@@ -412,8 +463,7 @@ def _add_music_and_whoosh(
 
     if whoosh_path and os.path.exists(whoosh_path):
         try:
-            if timeline.GetTrackCount("audio") < WHOOSH_TRACK_INDEX:
-                timeline.AddTrack("audio")
+            _ensure_audio_tracks(timeline, WHOOSH_TRACK_INDEX)
             whoosh_item = _import_media(media_pool, whoosh_path)
             end_frame = max(0, round(captions.MINIMAL_FAITH_WHOOSH_MAX_SECS * fps) - 1)
             _insert_audio_overlay(media_pool, whoosh_item, 0, end_frame, record_frame, WHOOSH_TRACK_INDEX)
@@ -453,12 +503,14 @@ def send_clip_to_resolve(
     if cold_open:
         co_start_frame = round(cold_open["start"] * fps)
         co_end_frame = max(co_start_frame, round(cold_open["end"] * fps) - 1)
-        _append_clip(media_pool, timeline, media_pool_item, co_start_frame, co_end_frame, framing=framing)
+        _append_clip(media_pool, timeline, media_pool_item, co_start_frame, co_end_frame, framing=framing,
+                     face_hint=_face_hint(filepath, cold_open["start"], cold_open["end"]))
 
     start_frame = round(start * fps)
     end_frame = max(start_frame, round(end * fps) - 1)
 
-    main_item = _append_clip(media_pool, timeline, media_pool_item, start_frame, end_frame, framing=framing)
+    main_item = _append_clip(media_pool, timeline, media_pool_item, start_frame, end_frame, framing=framing,
+                             face_hint=_face_hint(filepath, start, end))
     _add_music_and_whoosh(media_pool, timeline, main_item, fps, end - start, music_path, whoosh_path)
 
 
@@ -507,11 +559,13 @@ def send_clip_with_broll_to_resolve(
     if cold_open:
         co_start_frame = round(cold_open["start"] * fps)
         co_end_frame = max(co_start_frame, round(cold_open["end"] * fps) - 1)
-        _append_clip(media_pool, timeline, media_pool_item, co_start_frame, co_end_frame, framing=framing)
+        _append_clip(media_pool, timeline, media_pool_item, co_start_frame, co_end_frame, framing=framing,
+                     face_hint=_face_hint(filepath, cold_open["start"], cold_open["end"]))
 
     clip_start_frame = round(start * fps)
     clip_end_frame = max(clip_start_frame, round(end * fps) - 1)
-    main_item = _append_clip(media_pool, timeline, media_pool_item, clip_start_frame, clip_end_frame, framing=framing)
+    main_item = _append_clip(media_pool, timeline, media_pool_item, clip_start_frame, clip_end_frame, framing=framing,
+                             face_hint=_face_hint(filepath, start, end))
     _add_music_and_whoosh(media_pool, timeline, main_item, fps, end - start, music_path, whoosh_path)
 
     if not broll_clips:
@@ -594,7 +648,8 @@ def send_clip_with_commentary_to_resolve(
     if cold_open:
         co_start_frame = round(cold_open["start"] * fps)
         co_end_frame = max(co_start_frame, round(cold_open["end"] * fps) - 1)
-        _append_clip(media_pool, timeline, media_pool_item, co_start_frame, co_end_frame, framing=framing)
+        _append_clip(media_pool, timeline, media_pool_item, co_start_frame, co_end_frame, framing=framing,
+                     face_hint=_face_hint(filepath, cold_open["start"], cold_open["end"]))
 
     if intro_path:
         intro_item = _import_media(media_pool, intro_path)
@@ -602,7 +657,8 @@ def send_clip_with_commentary_to_resolve(
 
     start_frame = round(start * fps)
     end_frame = max(start_frame, round(end * fps) - 1)
-    main_item = _append_clip(media_pool, timeline, media_pool_item, start_frame, end_frame, framing=framing)
+    main_item = _append_clip(media_pool, timeline, media_pool_item, start_frame, end_frame, framing=framing,
+                             face_hint=_face_hint(filepath, start, end))
     _add_music_and_whoosh(media_pool, timeline, main_item, fps, end - start, music_path, whoosh_path)
 
     if close_path:

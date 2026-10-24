@@ -9,9 +9,10 @@ Resolve timeline separately for manual polishing, unaffected by this module.
 
 import os
 import subprocess
-from typing import Optional
+from typing import Callable, Optional
 
 import captions
+import reframe
 import tts
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "output")
@@ -110,12 +111,21 @@ def concat_segments(paths: list[str], out_path: str) -> str:
     if len(paths) < 2:
         raise ValueError("concat_segments needs at least 2 paths")
 
+    # The concat filter needs every input at one size. Commentary segments
+    # are always 9:16, while the body may be 1:1 or 4:5, so fit each input
+    # into the first one's frame (padding, never stretching).
+    width, height, _ = reframe.probe_video(paths[0])
     inputs = []
+    prep = []
     filter_inputs = []
     for i, p in enumerate(paths):
         inputs += ["-i", p]
-        filter_inputs.append(f"[{i}:v:0][{i}:a:0]")
-    filter_complex = "".join(filter_inputs) + f"concat=n={len(paths)}:v=1:a=1[outv][outa]"
+        prep.append(
+            f"[{i}:v:0]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
+        )
+        filter_inputs.append(f"[v{i}][{i}:a:0]")
+    filter_complex = ";".join(prep) + ";" + "".join(filter_inputs) + f"concat=n={len(paths)}:v=1:a=1[outv][outa]"
 
     _run_ffmpeg(
         # Segments can enter with different native frame rates (the TTS
@@ -172,6 +182,9 @@ def build_clip_with_cold_open(
     comment_bait_question: Optional[str] = None,
     crossfade: float = 0.15,
     add_captions: bool = True,
+    aspect: str = captions.DEFAULT_ASPECT,
+    follow_speaker: bool = True,
+    speaker_turns_for: Optional[Callable] = None,
 ) -> str:
     """Render the cold-open bumper (cold_open["start"]/["end"]) and the main
     clip [start, end) as two independently captioned parts, then join them
@@ -187,7 +200,11 @@ def build_clip_with_cold_open(
 
     add_captions=False skips burned-in captions (and pinned_line) on both
     parts — for callers who'll add their own subtitle template by hand in
-    Resolve instead."""
+    Resolve instead.
+
+    speaker_turns_for(start, end), when given, returns clip-relative
+    diarization turns for a range, so each part follows its own speaker."""
+    turns = speaker_turns_for or (lambda a, b: None)
     os.makedirs(output_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(filepath))[0]
     tag_root = f"{base}_{start:.1f}-{end:.1f}"
@@ -195,16 +212,19 @@ def build_clip_with_cold_open(
     cold_path = captions.burn_captions(
         filepath, segments, cold_open["start"], cold_open["end"], emphasis_words,
         preset_name=preset_name, output_dir=output_dir, add_captions=add_captions,
+        aspect=aspect, follow_speaker=follow_speaker,
+        speaker_turns=turns(cold_open["start"], cold_open["end"]),
     )
-    cold_tag = captions.clip_tag(filepath, cold_open["start"], cold_open["end"], preset_name)
+    cold_tag = captions.clip_tag(filepath, cold_open["start"], cold_open["end"], preset_name, aspect)
 
     main_path = captions.burn_captions(
         filepath, segments, start, end, emphasis_words, preset_name=preset_name, output_dir=output_dir,
         pinned_line=pinned_line if add_captions else None,
         pinned_line_emphasis=pinned_line_emphasis,
         comment_bait_question=comment_bait_question, add_captions=add_captions,
+        aspect=aspect, follow_speaker=follow_speaker, speaker_turns=turns(start, end),
     )
-    main_tag = captions.clip_tag(filepath, start, end, preset_name)
+    main_tag = captions.clip_tag(filepath, start, end, preset_name, aspect)
     intermediates = [cold_path, main_path]
     if add_captions:
         intermediates.append(os.path.join(output_dir, f"{cold_tag}.ass"))
@@ -214,7 +234,8 @@ def build_clip_with_cold_open(
     if comment_bait_question:
         intermediates.append(os.path.join(output_dir, f"{main_tag}_bait.ass"))
 
-    final_path = os.path.join(output_dir, f"{tag_root}_coldopen.mp4")
+    suffix = "" if aspect == captions.DEFAULT_ASPECT else "_" + aspect.replace(":", "x")
+    final_path = os.path.join(output_dir, f"{tag_root}_coldopen{suffix}.mp4")
     concat_with_crossfade(cold_path, main_path, final_path, crossfade=crossfade)
     cleanup_intermediates(intermediates)
     return final_path

@@ -8,6 +8,7 @@ API call.
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -15,6 +16,7 @@ from dotenv import load_dotenv
 from anthropic import Anthropic
 
 from audio_energy import window_energy_score
+import diarize
 import performance
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -22,6 +24,43 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 MODEL = os.environ.get("CLAUDE_SCORING_MODEL", "claude-sonnet-5")
 SCORING_CONCURRENCY = int(os.environ.get("SCORING_CONCURRENCY", "8"))
 SCORING_BATCH_SIZE = int(os.environ.get("SCORING_BATCH_SIZE", "4"))
+
+
+@dataclass(frozen=True)
+class ClipLength:
+    """Allowed clip duration (hard bounds) and the range the prompt asks
+    the model to aim for (improvement plan #8)."""
+    min_s: float
+    max_s: float
+    target_min_s: float
+    target_max_s: float
+
+    def window_len(self) -> float:
+        # Search windows need room for a whole clip plus some context.
+        return max(60.0, self.max_s + 15.0)
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+# Default Shorts length, overridable in backend/.env.
+SHORT = ClipLength(
+    min_s=_env_float("CLIP_MIN_SECONDS", 15.0),
+    max_s=_env_float("CLIP_MAX_SECONDS", 45.0),
+    target_min_s=_env_float("CLIP_TARGET_MIN_SECONDS", 20.0),
+    target_max_s=_env_float("CLIP_TARGET_MAX_SECONDS", 35.0),
+)
+# Long-form story clips, picked per job with AnalyzeRequest.long_form.
+LONG = ClipLength(
+    min_s=_env_float("LONG_CLIP_MIN_SECONDS", 45.0),
+    max_s=_env_float("LONG_CLIP_MAX_SECONDS", 90.0),
+    target_min_s=_env_float("LONG_CLIP_TARGET_MIN_SECONDS", 60.0),
+    target_max_s=_env_float("LONG_CLIP_TARGET_MAX_SECONDS", 75.0),
+)
 
 SYSTEM_PROMPT = """You evaluate excerpts from a longer video transcript for their \
 potential as standalone short-form clips (YouTube Shorts / Reels / TikTok), and \
@@ -34,11 +73,16 @@ so segment [0] in Window 2 is not the same as segment [0] in Window 0. For each 
 window, choose a contiguous range of segments (start_segment to end_segment, \
 inclusive) that forms one complete, standalone narrative or thought — with a clear \
 hook, a clean ending, and nothing important cut off mid-sentence. Prefer a total \
-duration between 20 and 35 seconds; 45 seconds is a hard ceiling. End the clip \
-right after the payoff line — never pad with irrelevant material to reach a target \
-length, and never cut a thought short just to stay under one. A shorter clip is \
-fine if that's genuinely what the content needs; anything over 45 seconds is \
-rejected outright.
+duration between {target_min} and {target_max} seconds; {max_s} seconds is a hard \
+ceiling and {min_s} seconds a hard floor. End the clip right after the payoff line \
+— never pad with irrelevant material to reach a target length, and never cut a \
+thought short just to stay under one. A shorter clip is fine if that's genuinely \
+what the content needs; anything over {max_s} seconds is rejected outright.
+
+Segments may carry a speaker label like "(SPEAKER_01)" when the video has more \
+than one speaker. Use it to keep straight who said what: a clip should be built \
+around one speaker's thought, or a clear exchange between two, never a line \
+lifted out of someone else's turn.
 
 Frame the "hook", "seo_title", and "seo_description" fields around the IDEA the clip \
 illustrates (discipline, patience, money, relationships, and so on) — not around the \
@@ -130,6 +174,17 @@ on lane_fit even if the clip is otherwise strong.
 - Loopability: score high when the last line flows naturally back into the first, \
 so the clip could replay seamlessly.
 """
+
+
+def system_prompt(lengths: ClipLength = SHORT) -> str:
+    """SYSTEM_PROMPT with this job's clip lengths filled in. Plain replace,
+    since the prompt's JSON examples contain literal braces."""
+    fmt = lambda v: f"{v:g}"
+    return (SYSTEM_PROMPT
+            .replace("{target_min}", fmt(lengths.target_min_s))
+            .replace("{target_max}", fmt(lengths.target_max_s))
+            .replace("{max_s}", fmt(lengths.max_s))
+            .replace("{min_s}", fmt(lengths.min_s)))
 
 
 def build_windows(
@@ -233,14 +288,14 @@ def _build_feedback_block() -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def _call_and_parse(client: Anthropic, batch: list[dict], prompt: str) -> list[dict]:
+def _call_and_parse(client: Anthropic, batch: list[dict], prompt: str, lengths: ClipLength = SHORT) -> list[dict]:
     feedback_block = _build_feedback_block()
     message = client.messages.create(
         model=MODEL,
         max_tokens=TOKENS_PER_WINDOW * len(batch),
         system=[{
             "type": "text",
-            "text": SYSTEM_PROMPT,
+            "text": system_prompt(lengths),
             "cache_control": {"type": "ephemeral"},
         }],
         messages=[{"role": "user", "content": f"{feedback_block}Candidate windows:\n\n{prompt}"}],
@@ -266,11 +321,14 @@ def _call_and_parse(client: Anthropic, batch: list[dict], prompt: str) -> list[d
     return results_raw
 
 
-def score_batch(client: Anthropic, batch: list[dict]) -> list[dict]:
+def score_batch(client: Anthropic, batch: list[dict], lengths: ClipLength = SHORT) -> list[dict]:
     parts = []
     for i, window in enumerate(batch):
         segs = window["segments"]
-        numbered = "\n".join(f"[{j}] {s['start']:.1f}s-{s['end']:.1f}s: {s['text'].strip()}" for j, s in enumerate(segs))
+        numbered = "\n".join(
+            f"[{j}] {s['start']:.1f}s-{s['end']:.1f}s{diarize.label(s)}: {s['text'].strip()}"
+            for j, s in enumerate(segs)
+        )
         parts.append(f"Window {i}:\n{numbered}")
     prompt = "\n\n".join(parts)
 
@@ -280,10 +338,10 @@ def score_batch(client: Anthropic, batch: list[dict]) -> list[dict]:
     # window in it, which previously meant a short video's only batch
     # failing could produce zero clips end to end.
     try:
-        results_raw = _call_and_parse(client, batch, prompt)
+        results_raw = _call_and_parse(client, batch, prompt, lengths)
     except (json.JSONDecodeError, RuntimeError, ValueError) as e:
         print(f"  [warn] batch response failed to parse ({e}), retrying once")
-        results_raw = _call_and_parse(client, batch, prompt)
+        results_raw = _call_and_parse(client, batch, prompt, lengths)
 
     by_index = {}
     for item in results_raw:
@@ -320,8 +378,9 @@ def score_batch(client: Anthropic, batch: list[dict]) -> list[dict]:
             continue
         chosen = segs[start_idx : end_idx + 1]
         duration = chosen[-1]["end"] - chosen[0]["start"]
-        if duration > 45.0 or duration < 15.0:
-            print(f"  [warn] rejecting clip [{chosen[0]['start']:.1f}-{chosen[-1]['end']:.1f}] ({duration:.1f}s, outside 15-45s)")
+        if duration > lengths.max_s or duration < lengths.min_s:
+            print(f"  [warn] rejecting clip [{chosen[0]['start']:.1f}-{chosen[-1]['end']:.1f}] "
+                  f"({duration:.1f}s, outside {lengths.min_s:g}-{lengths.max_s:g}s)")
             continue
 
         cold_open = None
@@ -364,9 +423,11 @@ def score_all_windows(
     segments: list[dict],
     energy: Optional[dict] = None,
     energy_percentile: float = 10.0,
+    lengths: ClipLength = SHORT,
     **window_kwargs,
 ) -> list[dict]:
     client = Anthropic()
+    window_kwargs.setdefault("max_len", lengths.window_len())
     windows = build_windows(segments, **window_kwargs)
     if energy is not None:
         windows = filter_low_energy(windows, energy, energy_percentile)
@@ -375,7 +436,7 @@ def score_all_windows(
 
     scored = []
     with ThreadPoolExecutor(max_workers=SCORING_CONCURRENCY) as executor:
-        future_to_batch = {executor.submit(score_batch, client, b): b for b in batches}
+        future_to_batch = {executor.submit(score_batch, client, b, lengths): b for b in batches}
         for future in as_completed(future_to_batch):
             b = future_to_batch[future]
             try:

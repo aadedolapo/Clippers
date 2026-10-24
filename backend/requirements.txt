@@ -9,3 +9,7 @@ soundfile
 python-dotenv
 elevenlabs
 requests
+opencv-python
+scenedetect[opencv]
+pyannote.audio>=3.1,<4
+pytest

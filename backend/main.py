@@ -1,12 +1,13 @@
 """
 FastAPI wrapper around the pipeline (PRD section 8): /analyze, /send-to-resolve,
-/status/{job_id}. In-memory job state only — no database, single user, localhost.
+/status/{job_id}. Job state lives in memory and is mirrored to one JSON file
+per job (jobs_store.py), so finished jobs survive a restart. Single user,
+localhost.
 """
 
 import hashlib
 import logging
 import os
-import subprocess
 import threading
 import time
 import uuid
@@ -26,49 +27,52 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from pipeline import DOWNLOAD_DIR, download_video, use_local_file, unique_download_path, transcribe
+from pipeline import download_video, use_local_file, unique_download_path, transcribe
 from scoring import score_video
-import agent
 import beat_plan
 import broll
 import resolve_integration
 import captions
 import commentary
 import commentary_render
+import diarize
+import jobs_store
+import llm_scoring
 import music
 import performance
 import sfx
+import shots
 import storage
-import watcher
 
 EXECUTOR = ThreadPoolExecutor(max_workers=2)
+# Background helpers a job waits on (shot detection), kept separate so they
+# can't deadlock behind the analysis jobs that submitted them.
+SIDE_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
 
-# 4K Video Downloader's output folder. Unset means no watching; videos can
-# still be analyzed by hand through the UI.
-WATCH_DIR = os.environ.get("CLIPPER_WATCH_DIR")
-
-
 def _submit_job(local_file: Optional[str] = None, url: Optional[str] = None,
                 title: Optional[str] = None, source: Optional[str] = None,
-                use_agent: bool = False) -> str:
+                long_form: bool = False) -> str:
     job_id = str(uuid.uuid4())
     with JOBS_LOCK:
-        JOBS[job_id] = {"status": "queued", "url": url, "local_file": local_file, "agent": use_agent,
-                        "created_at": time.time(), "events": []}
-    EXECUTOR.submit(_run_analysis, job_id, url, local_file, title, source, use_agent)
+        JOBS[job_id] = {"status": "queued", "url": url, "local_file": local_file,
+                        "requested_title": title, "source": source, "long_form": long_form,
+                        "created_at": time.time()}
+    _persist_job(job_id)
+    EXECUTOR.submit(_run_analysis, job_id, url, local_file, title, source, long_form)
     return job_id
 
 
 @asynccontextmanager
 async def lifespan(_app):
-    if WATCH_DIR:
-        # use_local_file copies into DOWNLOAD_DIR, so watching that folder
-        # would pick up its own copies as new videos.
-        if os.path.realpath(os.path.expanduser(WATCH_DIR)) == os.path.realpath(DOWNLOAD_DIR):
-            raise RuntimeError("CLIPPER_WATCH_DIR must not be backend/downloads; point it at 4K Video Downloader's folder")
-        watcher.start_watcher(WATCH_DIR, lambda path: _submit_job(local_file=path, use_agent=True))
+    # Finished jobs come back from disk; ones cut off mid-run come back as
+    # errors that can be retried (see jobs_store.load_all).
+    restored = jobs_store.load_all()
+    with JOBS_LOCK:
+        JOBS.update(restored)
+    if restored:
+        logger.info(f"restored {len(restored)} job(s) from {jobs_store.JOBS_DIR}")
     yield
 
 
@@ -85,9 +89,9 @@ class AnalyzeRequest(BaseModel):
     # per video for future permission outreach and claim tracing (PRD
     # pipeline step 6).
     source: Optional[str] = None
-    # Let the orchestrator agent (agent.py) review and pick clips instead of
-    # taking the scorer's top 3 as-is. Watch-folder jobs always use it.
-    agent: bool = False
+    # Look for longer story clips (llm_scoring.LONG, 45-90s by default)
+    # instead of Shorts-length ones.
+    long_form: bool = False
 
 
 class BrollSelection(BaseModel):
@@ -138,6 +142,14 @@ class ClipSelection(BaseModel):
     bw_grade: bool = False
     music_bed: bool = False
     music_mood: Literal["slow", "cinematic"] = "slow"
+    # Burn captions into the output/ mp4 (improvement plan #6). Off by
+    # default; the Resolve timeline never gets burned-in captions either
+    # way, so native subtitles there still work.
+    burn_captions: bool = False
+    # Output canvas for the output/ mp4. The Resolve timeline stays 9:16.
+    aspect: Literal["9:16", "4:5", "1:1"] = "9:16"
+    # Face-following crop (reframe.py) instead of a fixed center crop.
+    follow_speaker: bool = True
 
 
 class SendToResolveRequest(BaseModel):
@@ -165,12 +177,19 @@ class PerformanceRequest(BaseModel):
 def _set_job(job_id: str, **fields):
     with JOBS_LOCK:
         JOBS[job_id].update(fields)
+    # Persist on status changes and final results only: a done job carries
+    # the full word-level transcript.
+    if "status" in fields or "copyright_status" in fields:
+        _persist_job(job_id)
 
 
-def _job_event(job_id: str, kind: str, text: str):
-    """Append to a job's activity feed, shown live on the /agent page."""
+def _persist_job(job_id: str):
     with JOBS_LOCK:
-        JOBS[job_id].setdefault("events", []).append({"t": time.time(), "kind": kind, "text": text})
+        snapshot = dict(JOBS[job_id])
+    try:
+        jobs_store.save_job(job_id, snapshot)
+    except Exception:
+        logger.exception(f"failed to persist job {job_id}")
 
 
 def _serialize_clip(c: dict) -> dict:
@@ -189,7 +208,8 @@ def _serialize_clip(c: dict) -> dict:
         "seo_description": c["seo_description"],
         "scorecard": c["scorecard"],
         "cold_open": c.get("cold_open"),
-        "agent_note": c.get("agent_note"),
+        "visual": c.get("visual"),
+        "pre_shot_snap": c.get("pre_shot_snap"),
     }
 
 
@@ -210,36 +230,36 @@ def _run_analysis(
     local_file: Optional[str] = None,
     title: Optional[str] = None,
     source: Optional[str] = None,
-    use_agent: bool = False,
+    long_form: bool = False,
 ):
     try:
         _set_job(job_id, status="downloading")
-        _job_event(job_id, "stage", f"Loading {local_file or url}")
         info = use_local_file(local_file, title=title) if local_file else download_video(url)
         filepath = info["_filepath"]
         video_id = info["id"]
         title = info.get("title", video_id)
 
         _set_job(job_id, status="transcribing", video_id=video_id, title=title, filepath=filepath, source=source)
-        _job_event(job_id, "stage", "Transcribing with faster-whisper (the slow part on CPU)")
+        # Shot detection only needs the video, so it runs alongside
+        # transcription instead of after it.
+        shots_future = SIDE_EXECUTOR.submit(shots.detect_shots, filepath)
         segments = transcribe(filepath)
-        _job_event(job_id, "stage", f"Transcribed {len(segments)} segments, {segments[-1]['end'] / 60:.1f} min of speech" if segments else "Transcript is empty")
 
-        _set_job(job_id, status="scoring", segments=segments)
-        agent_summary = None
-        if use_agent:
-            clips, rejected, agent_summary = agent.run_agent(
-                segments, filepath, title, source=source,
-                on_event=lambda kind, text: _job_event(job_id, kind, text),
-            )
-        else:
-            # Top 3 per video — 8 was producing more candidates than were
-            # actually worth reviewing per video.
-            clips, rejected = score_video(segments, filepath, top_n=3)
+        speaker_turns = []
+        if diarize.available():
+            speaker_turns = diarize.diarize(filepath)
+            diarize.assign_speakers(segments, speaker_turns)
+        shot_cuts = shots_future.result()
 
-        _set_job(job_id, status="done", clips=clips, rejected=rejected, agent_summary=agent_summary)
-        # Persist hook/title/description (and timing) to disk immediately so
-        # they survive a browser refresh even though JOBS is in-memory only.
+        lengths = llm_scoring.LONG if long_form else llm_scoring.SHORT
+        _set_job(job_id, status="scoring", segments=segments, shot_cuts=shot_cuts, speaker_turns=speaker_turns)
+        # Top 3 per video — 8 was producing more candidates than were
+        # actually worth reviewing per video.
+        clips, rejected = score_video(segments, filepath, top_n=3, shot_cuts=shot_cuts, lengths=lengths)
+
+        _set_job(job_id, status="done", clips=clips, rejected=rejected)
+        # Also save hook/title/description (and timing) to the session store,
+        # which the shortlist and performance log read across videos.
         copyright_status = storage.save_session(
             video_id, title, [_serialize_clip(c) for c in clips], source=source
         )
@@ -247,7 +267,6 @@ def _run_analysis(
     except Exception as e:
         logger.exception(f"analyze job {job_id} failed")
         _set_job(job_id, status="error", error=str(e))
-        _job_event(job_id, "error", str(e))
 
 
 @app.post("/upload")
@@ -272,48 +291,63 @@ def analyze(req: AnalyzeRequest):
         raise HTTPException(status_code=400, detail="Provide exactly one of 'url' or 'local_file'")
 
     job_id = _submit_job(local_file=req.local_file, url=req.url, title=req.title,
-                         source=req.source, use_agent=req.agent)
+                         source=req.source, long_form=req.long_form)
     return {"job_id": job_id}
 
 
 @app.get("/jobs")
 def list_jobs():
-    """Every job this server process has run, newest last — the only way to
-    see watch-folder jobs, which no browser tab started."""
+    """Every job, including ones restored from disk, newest last."""
     with JOBS_LOCK:
         jobs = [
-            {"job_id": jid, "status": j["status"], "title": j.get("title") or os.path.basename(j.get("local_file") or j.get("url") or ""),
-             "video_id": j.get("video_id"), "agent": j.get("agent", False), "error": j.get("error"),
-             "created_at": j.get("created_at")}
+            {"job_id": jid, "status": j["status"], "title": j.get("title") or j.get("requested_title") or os.path.basename(j.get("local_file") or j.get("url") or ""),
+             "video_id": j.get("video_id"), "error": j.get("error"),
+             "interrupted": j.get("interrupted", False), "created_at": j.get("created_at"),
+             "retried_as": j.get("retried_as"), "dismissed": j.get("dismissed", False)}
             for jid, j in JOBS.items()
         ]
-    return {"jobs": jobs, "watch_dir": WATCH_DIR}
+    jobs.sort(key=lambda j: j["created_at"] or 0)
+    return {"jobs": jobs}
 
 
-@app.get("/local-videos")
-def local_videos():
-    """Videos already in backend/downloads, for starting an agent run from
-    the /agent page without going through 4K Video Downloader."""
-    videos = []
-    for name in sorted(os.listdir(DOWNLOAD_DIR)):
-        path = os.path.join(DOWNLOAD_DIR, name)
-        if not os.path.isfile(path) or os.path.splitext(name)[1].lower() not in watcher.VIDEO_EXTS:
-            continue
-        try:
-            out = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
-                capture_output=True, text=True, timeout=10,
-            )
-            minutes = float(out.stdout.strip()) / 60
-        except (subprocess.SubprocessError, ValueError):
-            minutes = 0.0
-        videos.append({"name": name, "path": path, "minutes": minutes})
-    return {"videos": videos}
+def _failed_job(job_id: str) -> dict:
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job["status"] != "error":
+        raise HTTPException(status_code=400, detail="only failed jobs can be retried or dismissed")
+    return job
 
 
-@app.get("/agent")
-def agent_page():
-    return FileResponse(os.path.join(FRONTEND_DIR, "agent.html"))
+@app.post("/jobs/{job_id}/retry")
+def retry_job(job_id: str):
+    """Re-run a failed job (typically one interrupted by a restart) with the
+    same input. Returns the new job's id; the failed one stays in the list,
+    marked with retried_as so the main page stops offering it."""
+    job = _failed_job(job_id)
+    if job.get("retried_as"):
+        raise HTTPException(status_code=400, detail="job was already retried")
+    # Reuse the copy already in downloads/ when the first run got that far,
+    # so the retry keeps the same video_id instead of making a second copy.
+    copied = job.get("filepath") if job.get("filepath") and os.path.exists(job["filepath"]) else None
+    new_id = _submit_job(local_file=copied or job.get("local_file"), url=None if copied else job.get("url"),
+                         title=job.get("requested_title"), source=job.get("source"),
+                         long_form=job.get("long_form", False))
+    with JOBS_LOCK:
+        job["retried_as"] = new_id
+    _persist_job(job_id)
+    return {"job_id": new_id}
+
+
+@app.post("/jobs/{job_id}/dismiss")
+def dismiss_job(job_id: str):
+    """Hide a failed job from the main page without retrying it."""
+    job = _failed_job(job_id)
+    with JOBS_LOCK:
+        job["dismissed"] = True
+    _persist_job(job_id)
+    return {"ok": True}
 
 
 @app.get("/status/{job_id}")
@@ -323,10 +357,10 @@ def status(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
-    response = {"status": job["status"], "agent": job.get("agent", False), "title": job.get("title"),
-                "events": job.get("events", [])}
+    response = {"status": job["status"], "title": job.get("title")}
     if job["status"] == "error":
         response["error"] = job.get("error")
+        response["interrupted"] = job.get("interrupted", False)
     if job["status"] == "done":
         response["video_id"] = job["video_id"]
         response["title"] = job["title"]
@@ -334,7 +368,6 @@ def status(job_id: str):
         response["copyright_status"] = job.get("copyright_status", storage.DEFAULT_COPYRIGHT_STATUS)
         response["clips"] = [_serialize_clip(c) for c in job["clips"]]
         response["rejected"] = [_serialize_rejected(c) for c in job.get("rejected", [])]
-        response["agent_summary"] = job.get("agent_summary")
     return response
 
 
@@ -460,17 +493,28 @@ def update_copyright_status(video_id: str, req: CopyrightStatusRequest):
     if job is not None:
         with JOBS_LOCK:
             job["copyright_status"] = req.status
+            job_id = next((jid for jid, j in JOBS.items() if j is job), None)
+        if job_id is not None:
+            _persist_job(job_id)
 
     return {"video_id": video_id, "copyright_status": record["copyright_status"]}
 
 
 @app.post("/send-to-resolve")
 def send_to_resolve(req: SendToResolveRequest):
+    """Put each clip on the Resolve timeline and render its ready-to-post
+    mp4 into output/. The mp4 doesn't need Resolve, so when Resolve can't be
+    reached (free version without external scripting, not open, or not
+    installed) the clip is still rendered for finishing in another editor,
+    and the result carries resolve_error instead of failing."""
     job = _find_job_by_video_id(req.video_id)
     if job is None:
         raise HTTPException(status_code=404, detail="video not found; run /analyze first")
 
     results = []
+    # Set on the first clip that finds Resolve unreachable, so the rest of
+    # this request skips it instead of waiting on the connection again.
+    resolve_down: Optional[str] = None
     for clip in req.clips:
         matched = next(
             (c for c in job["clips"] if abs(c["start"] - clip.start) < 0.5 and abs(c["end"] - clip.end) < 0.5),
@@ -534,40 +578,58 @@ def send_to_resolve(req: SendToResolveRequest):
                         commentary_close_path = close_render["path"]
                         commentary_intermediates = close_render["intermediates"]
 
-            if broll_clips:
-                resolve_integration.send_clip_with_broll_to_resolve(
-                    filepath=job["filepath"],
-                    title=job["title"],
-                    start=clip.start,
-                    end=clip.end,
-                    broll_clips=broll_clips,
-                    cold_open=cold_open,
-                    music_path=music_path,
-                    whoosh_path=whoosh_path,
-                )
-            elif commentary_close_path:
-                resolve_integration.send_clip_with_commentary_to_resolve(
-                    filepath=job["filepath"],
-                    title=job["title"],
-                    start=clip.start,
-                    end=clip.end,
-                    close_path=commentary_close_path,
-                    cold_open=cold_open,
-                    music_path=music_path,
-                    whoosh_path=whoosh_path,
-                )
-            else:
-                resolve_integration.send_clip_to_resolve(
-                    filepath=job["filepath"],
-                    title=job["title"],
-                    start=clip.start,
-                    end=clip.end,
-                    cold_open=cold_open,
-                    music_path=music_path,
-                    whoosh_path=whoosh_path,
-                )
+            resolve_error = resolve_down
+            if resolve_error is None:
+                try:
+                    if broll_clips:
+                        resolve_integration.send_clip_with_broll_to_resolve(
+                            filepath=job["filepath"],
+                            title=job["title"],
+                            start=clip.start,
+                            end=clip.end,
+                            broll_clips=broll_clips,
+                            cold_open=cold_open,
+                            music_path=music_path,
+                            whoosh_path=whoosh_path,
+                        )
+                    elif commentary_close_path:
+                        resolve_integration.send_clip_with_commentary_to_resolve(
+                            filepath=job["filepath"],
+                            title=job["title"],
+                            start=clip.start,
+                            end=clip.end,
+                            close_path=commentary_close_path,
+                            cold_open=cold_open,
+                            music_path=music_path,
+                            whoosh_path=whoosh_path,
+                        )
+                    else:
+                        resolve_integration.send_clip_to_resolve(
+                            filepath=job["filepath"],
+                            title=job["title"],
+                            start=clip.start,
+                            end=clip.end,
+                            cold_open=cold_open,
+                            music_path=music_path,
+                            whoosh_path=whoosh_path,
+                        )
+                except resolve_integration.ResolveUnavailable as e:
+                    resolve_down = resolve_error = str(e)
+                    logger.warning(f"Resolve unavailable, rendering mp4 only: {e}")
+                except Exception as e:
+                    resolve_error = str(e)
+                    logger.exception(f"Resolve step failed for clip [{clip.start:.1f}-{clip.end:.1f}]; rendering mp4 anyway")
 
             caption_path = None
+            render_opts = {
+                "add_captions": clip.burn_captions,
+                "aspect": clip.aspect,
+                "follow_speaker": clip.follow_speaker,
+            }
+
+            def turns_for(a: float, b: float):
+                return diarize.turns_in_range(job.get("speaker_turns"), a, b)
+
             if matched is not None and is_minimal_faith:
                 body_path = captions.render_minimal_faith_clip(
                     filepath=job["filepath"],
@@ -580,7 +642,8 @@ def send_to_resolve(req: SendToResolveRequest):
                     music_path=music_path,
                     whoosh_path=whoosh_path,
                     comment_bait_question=comment_bait_question,
-                    add_captions=False,  # captions are added by hand in Resolve; never burned in here
+                    speaker_turns=turns_for(clip.start, clip.end),
+                    **render_opts,
                 )
             elif matched is not None and cold_open:
                 body_path = commentary_render.build_clip_with_cold_open(
@@ -594,7 +657,8 @@ def send_to_resolve(req: SendToResolveRequest):
                     pinned_line_emphasis=pinned_line_emphasis,
                     preset_name=clip.caption_preset,
                     comment_bait_question=comment_bait_question,
-                    add_captions=False,  # captions are added by hand in Resolve; never burned in here
+                    speaker_turns_for=turns_for,
+                    **render_opts,
                 )
             elif matched is not None:
                 body_path = captions.burn_captions(
@@ -607,14 +671,16 @@ def send_to_resolve(req: SendToResolveRequest):
                     pinned_line_emphasis=pinned_line_emphasis,
                     preset_name=clip.caption_preset,
                     comment_bait_question=comment_bait_question,
-                    add_captions=False,  # captions are added by hand in Resolve; never burned in here
+                    speaker_turns=turns_for(clip.start, clip.end),
+                    **render_opts,
                 )
             else:
                 body_path = None
 
             if body_path is not None and commentary_close_path:
                 base = os.path.splitext(os.path.basename(job["filepath"]))[0]
-                caption_path = os.path.join(captions.OUTPUT_DIR, f"{base}_{clip.start:.1f}-{clip.end:.1f}_final.mp4")
+                suffix = "" if clip.aspect == captions.DEFAULT_ASPECT else "_" + clip.aspect.replace(":", "x")
+                caption_path = os.path.join(captions.OUTPUT_DIR, f"{base}_{clip.start:.1f}-{clip.end:.1f}_final{suffix}.mp4")
                 commentary_render.concat_segments([body_path, commentary_close_path], caption_path)
                 # commentary_close_path itself is excluded: Resolve's
                 # timeline (above) still references that exact file.
@@ -622,11 +688,17 @@ def send_to_resolve(req: SendToResolveRequest):
             else:
                 caption_path = body_path
 
+            if resolve_error and not caption_path:
+                raise RuntimeError(resolve_error)
             results.append({
                 "start": clip.start,
                 "end": clip.end,
                 "success": True,
-                "captioned_mp4": caption_path,
+                "captioned_mp4": os.path.normpath(caption_path) if caption_path else None,
+                "in_resolve": resolve_error is None,
+                "resolve_error": resolve_error,
+                # B-roll only goes on the Resolve timeline, never into the mp4.
+                "broll_skipped": bool(resolve_error and broll_clips),
             })
         except Exception as e:
             logger.exception(f"send-to-resolve failed for clip [{clip.start:.1f}-{clip.end:.1f}]")
@@ -652,11 +724,18 @@ def _download_broll_selection(sel: BrollSelection) -> str:
 
 
 def _find_job_by_video_id(video_id: str) -> Optional[dict]:
+    """Newest finished job for this video. Falls back to disk for a job this
+    process never loaded (e.g. written by another server instance)."""
     with JOBS_LOCK:
-        for job in JOBS.values():
-            if job.get("video_id") == video_id and job.get("status") == "done":
-                return job
-    return None
+        done = [j for j in JOBS.values() if j.get("video_id") == video_id and j.get("status") == "done"]
+        if done:
+            return max(done, key=lambda j: j.get("created_at") or 0)
+    found = jobs_store.find_done_job_by_video_id(video_id)
+    if found is None:
+        return None
+    job_id, job = found
+    with JOBS_LOCK:
+        return JOBS.setdefault(job_id, job)
 
 
 class SuggestBrollRequest(BaseModel):

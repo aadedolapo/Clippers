@@ -13,3 +13,7 @@ CLAUDE_CODE_TEST_RUN.md
 RETENTION_UPGRADE_PLAN.md
 prd.md
 viral-clipper-prd.md
+backend/eval/clips.json
+backend/eval/results.jsonl
+.pytest_cache/
+*.md

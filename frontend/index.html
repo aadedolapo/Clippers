@@ -14,6 +14,7 @@
     --accent: #6ea8fe;
     --good: #4caf7d;
     --bad: #e0616b;
+    --warn: #e0b04c;
   }
   * { box-sizing: border-box; }
   body {
@@ -122,6 +123,11 @@
     background: rgba(76, 175, 125, 0.12);
     border-color: var(--good);
     color: var(--good);
+  }
+  .session-retry-bar {
+    margin-top: 8px;
+    display: none;
+    gap: 8px;
   }
   .session-error {
     margin-top: 12px;
@@ -300,6 +306,7 @@
   .clip-result { margin-top: 8px; font-size: 12px; }
   .clip-result.ok { color: var(--good); }
   .clip-result.fail { color: var(--bad); }
+  .clip-result.warn { color: var(--warn); }
 
   .session-send-bar {
     margin-top: 16px;
@@ -416,6 +423,7 @@
     <input type="file" id="local-file-input" accept="video/*" multiple />
     <input type="text" id="local-title-input" placeholder="Title (optional, single file only)" style="flex: 0 0 220px;" />
     <input type="text" id="local-source-input" placeholder="Church/speaker (optional, single file only)" style="flex: 0 0 220px;" />
+    <label class="clip-style-checkbox" title="Look for 45-90s story clips instead of Shorts-length ones"><input type="checkbox" id="long-form-input" /> Long-form clips</label>
     <button id="analyze-btn">Analyze</button>
   </div>
   <p style="margin-top: 10px; font-size: 13px; color: var(--muted);">Select one or more video files to queue them all at once. Source is logged per video for future permission outreach and claim tracing.</p>
@@ -440,6 +448,22 @@ function escapeHtml(s) {
   const div = document.createElement("div");
   div.textContent = s;
   return div.innerHTML;
+}
+
+// One line for a /send-to-resolve result. When Resolve can't be reached the
+// mp4 is still rendered, so that's a warning (finish it in any editor), not
+// a failure.
+function describeSendResult(r) {
+  if (!r.success) return { kind: "fail", text: `Failed: ${r.error}` };
+  const mp4 = r.captioned_mp4 ? `mp4: ${r.captioned_mp4}` : "";
+  if (r.in_resolve === false) {
+    const broll = r.broll_skipped ? " B-roll only goes on the Resolve timeline, so it isn't in the mp4." : "";
+    return {
+      kind: "warn",
+      text: `Not sent to Resolve (${r.resolve_error}). Rendered the mp4 only, ready for any editor — ${mp4}.${broll}`,
+    };
+  }
+  return { kind: "ok", text: mp4 ? `Sent to Resolve — ${mp4}` : "Sent to Resolve" };
 }
 
 function downloadClipText(clip, index) {
@@ -477,6 +501,10 @@ function createSession(name, insertAt) {
     </div>
     <div class="session-body">
       <div class="session-error"></div>
+      <div class="session-retry-bar">
+        <button type="button" class="session-retry-btn">Retry</button>
+        <button type="button" class="secondary session-dismiss-btn">Dismiss</button>
+      </div>
       <div class="session-clips"></div>
       <div class="session-send-bar">
         <button type="button" class="session-send-btn">Send to Resolve</button>
@@ -502,9 +530,14 @@ function createSession(name, insertAt) {
   const sendBtn = root.querySelector(".session-send-btn");
   const sendCount = root.querySelector(".session-send-count");
   const complianceEl = root.querySelector(".compliance-badge");
+  const retryBar = root.querySelector(".session-retry-bar");
+  const retryBtn = root.querySelector(".session-retry-btn");
+  const dismissBtn = root.querySelector(".session-dismiss-btn");
 
   let videoId = null;
   let clips = [];
+  // The analysis job this session is showing, so a failed one can be retried.
+  let jobId = null;
 
   // PRD §14 compliance layer: always renders as a warning until a human
   // explicitly clicks it to mark the source cleared — the system itself
@@ -596,6 +629,7 @@ function createSession(name, insertAt) {
             <span class="clip-score">${(clip.score * 10).toFixed(1)}/10</span>
           </div>
           <div class="clip-reason">${escapeHtml(clip.reason)}</div>
+          ${clip.visual ? `<div class="clip-reason">Visuals: first frame ${clip.visual.first_frame_strength}/10, energy ${clip.visual.visual_energy}/10. ${escapeHtml(clip.visual.note)}</div>` : ""}
           ${clip.cold_open ? `
           <div class="clip-coldopen">
             <label class="clip-coldopen-label">
@@ -622,6 +656,13 @@ function createSession(name, insertAt) {
             <select class="clip-music-mood">
               <option value="slow" selected>Slow</option>
               <option value="cinematic">Cinematic</option>
+            </select>
+            <label class="clip-style-checkbox" title="Burn captions into the output/ mp4 only; the Resolve timeline stays caption-free"><input type="checkbox" class="clip-burn-captions-checkbox" /> Burn captions</label>
+            <label class="clip-style-checkbox"><input type="checkbox" class="clip-follow-speaker-checkbox" checked /> Follow speaker</label>
+            <select class="clip-aspect" title="Aspect ratio of the output/ mp4">
+              <option value="9:16" selected>9:16</option>
+              <option value="4:5">4:5</option>
+              <option value="1:1">1:1</option>
             </select>
           </div>
           <div class="clip-fields">${fieldsHtml}</div>
@@ -811,17 +852,54 @@ function createSession(name, insertAt) {
     updateSendBar();
   }
 
-  function poll(jobId) {
+  // A failed job can be re-run with the same video and settings, or
+  // dismissed so it stops coming back on page load.
+  function showFailed(data) {
+    statusEl.textContent = data.interrupted ? "Interrupted" : "Error";
+    setError(data.error || "Analysis failed.");
+    retryBar.style.display = jobId ? "flex" : "none";
+  }
+
+  retryBtn.addEventListener("click", async () => {
+    retryBtn.disabled = dismissBtn.disabled = true;
+    try {
+      const res = await fetch(`/jobs/${jobId}/retry`, { method: "POST" });
+      if (!res.ok) throw new Error(`retry failed (${res.status})`);
+      const data = await res.json();
+      setError(null);
+      retryBar.style.display = "none";
+      statusEl.textContent = "Starting…";
+      poll(data.job_id);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      retryBtn.disabled = dismissBtn.disabled = false;
+    }
+  });
+
+  dismissBtn.addEventListener("click", async () => {
+    retryBtn.disabled = dismissBtn.disabled = true;
+    try {
+      const res = await fetch(`/jobs/${jobId}/dismiss`, { method: "POST" });
+      if (!res.ok) throw new Error(`dismiss failed (${res.status})`);
+      root.remove();
+    } catch (e) {
+      setError(e.message);
+      retryBtn.disabled = dismissBtn.disabled = false;
+    }
+  });
+
+  function poll(id) {
+    jobId = id;
     const handle = setInterval(async () => {
       try {
-        const res = await fetch(`/status/${jobId}`);
+        const res = await fetch(`/status/${id}`);
         if (!res.ok) throw new Error(`status request failed (${res.status})`);
         const data = await res.json();
 
         if (data.status === "error") {
           clearInterval(handle);
-          statusEl.textContent = "Error";
-          setError(data.error || "Analysis failed.");
+          showFailed(data);
           return;
         }
 
@@ -883,9 +961,13 @@ function createSession(name, insertAt) {
       const bw_grade = clipEl.querySelector(".clip-bw-grade-checkbox").checked;
       const music_bed = clipEl.querySelector(".clip-music-bed-checkbox").checked;
       const music_mood = clipEl.querySelector(".clip-music-mood").value;
+      const burn_captions = clipEl.querySelector(".clip-burn-captions-checkbox").checked;
+      const follow_speaker = clipEl.querySelector(".clip-follow-speaker-checkbox").checked;
+      const aspect = clipEl.querySelector(".clip-aspect").value;
       return {
         start: clip.start, end: clip.end, broll, beat_plan, use_cold_open, with_commentary,
         caption_preset, zoom_opener, bw_grade, music_bed, music_mood,
+        burn_captions, follow_speaker, aspect,
       };
     });
 
@@ -901,14 +983,9 @@ function createSession(name, insertAt) {
       selected.forEach((cb, i) => {
         const resultEl = cb.closest(".clip").querySelector(".clip-result");
         const r = results[i];
-        if (r.success) {
-          resultEl.className = "clip-result ok";
-          const mp4Note = r.captioned_mp4 ? ` — captioned mp4: ${escapeHtml(r.captioned_mp4)}` : "";
-          resultEl.innerHTML = `Sent to Resolve${mp4Note}`;
-        } else {
-          resultEl.className = "clip-result fail";
-          resultEl.textContent = `Failed: ${r.error}`;
-        }
+        const { kind, text } = describeSendResult(r);
+        resultEl.className = `clip-result ${kind}`;
+        resultEl.textContent = text;
       });
     } catch (e) {
       setError(e.message);
@@ -922,6 +999,7 @@ function createSession(name, insertAt) {
     setName: (name) => { nameEl.textContent = name; },
     setStatus: (text) => { statusEl.textContent = text; },
     setError,
+    showFailed: (id, data) => { jobId = id; showFailed(data); },
     setDone: (id, clipList, copyrightStatus) => {
       videoId = id;
       clips = clipList;
@@ -945,7 +1023,10 @@ function startSession(file, titleOverride, sourceOverride) {
       const uploadRes = await fetch("/upload", { method: "POST", body: form });
       if (!uploadRes.ok) throw new Error(`upload failed (${uploadRes.status})`);
       const { local_file, title } = await uploadRes.json();
-      const body = { local_file, title: titleOverride || title, source: sourceOverride || undefined };
+      const body = {
+        local_file, title: titleOverride || title, source: sourceOverride || undefined,
+        long_form: document.getElementById("long-form-input").checked,
+      };
       session.setName(body.title);
 
       session.setStatus("Starting…");
@@ -970,6 +1051,29 @@ function restoreSession(saved) {
   const session = createSession(saved.title, "end");
   session.setStatus("Restored");
   session.setDone(saved.video_id, saved.clips, saved.copyright_status);
+}
+
+// Jobs this page didn't start in its current life: ones still running (so a
+// refresh doesn't lose them) and failed ones that haven't been retried or
+// dismissed, each with a Retry button.
+async function loadJobs() {
+  try {
+    const res = await fetch("/jobs");
+    if (!res.ok) return;
+    const { jobs } = await res.json();
+    jobs.forEach((job) => {
+      if (job.status === "done" || job.retried_as || job.dismissed) return;
+      const session = createSession(job.title || "Video", "start");
+      if (job.status === "error") {
+        session.showFailed(job.job_id, job);
+      } else {
+        session.setStatus(job.status + "…");
+        session.poll(job.job_id);
+      }
+    });
+  } catch (e) {
+    console.error("Failed to load jobs", e);
+  }
 }
 
 async function loadSavedSessions() {
@@ -1051,8 +1155,9 @@ function renderShortlist(data) {
         if (!res.ok) throw new Error(`send-to-resolve failed (${res.status})`);
         const { results } = await res.json();
         const r = results[0];
-        resultEl.style.color = r.success ? "var(--good)" : "var(--bad)";
-        resultEl.textContent = r.success ? "Sent to Resolve" : `Failed: ${r.error}`;
+        const { kind, text } = describeSendResult(r);
+        resultEl.style.color = `var(--${kind === "ok" ? "good" : kind === "fail" ? "bad" : "warn"})`;
+        resultEl.textContent = text;
       } catch (e) {
         resultEl.style.color = "var(--bad)";
         resultEl.textContent = e.message;
@@ -1103,6 +1208,7 @@ performanceCsvInput.addEventListener("change", async () => {
 });
 
 loadSavedSessions();
+loadJobs();
 loadShortlist();
 
 analyzeBtn.addEventListener("click", analyze);

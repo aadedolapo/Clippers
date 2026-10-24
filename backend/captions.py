@@ -8,6 +8,8 @@ import re
 import subprocess
 from typing import Optional
 
+import reframe
+
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "output")
 
 # Named style presets (PRD 6.4): font, colors, outline. ASS colors are &HAABBGGRR.
@@ -122,6 +124,25 @@ PORTRAIT_WIDTH = 1080
 PORTRAIT_HEIGHT = 1920
 STYLE_REFERENCE_HEIGHT = 720
 
+# Render targets (improvement plan #8). Width stays 1080 for all of them, so
+# caption font sizes (in ASS PlayRes units) keep the same size relative to
+# the frame width; only the canvas height changes.
+ASPECTS = {
+    "9:16": (PORTRAIT_WIDTH, PORTRAIT_HEIGHT),
+    "4:5": (PORTRAIT_WIDTH, 1350),
+    "1:1": (PORTRAIT_WIDTH, 1080),
+}
+DEFAULT_ASPECT = "9:16"
+
+
+def aspect_dims(aspect: str) -> tuple[int, int]:
+    return ASPECTS.get(aspect, ASPECTS[DEFAULT_ASPECT])
+
+
+def _aspect_ratio(aspect: str) -> tuple[int, int]:
+    w, h = aspect.split(":") if aspect in ASPECTS else DEFAULT_ASPECT.split(":")
+    return int(w), int(h)
+
 # "Minimal Faith" style (retention upgrade plan phase 7): phrase-based
 # animated captions + edit effects, ported from the already-tested
 # prototype at _style_test/minimal_faith_test.py rather than reinvented —
@@ -162,11 +183,13 @@ _STOP_WORDS = {"a", "an", "the", "to", "of", "and", "or", "in", "on", "that",
 # the phrase carrying the emphasis word, otherwise alternating
 # blur_slide_up/slide_right so consecutive plain phrases don't feel
 # repetitive.
-_MINIMAL_FAITH_ANIMS = {
-    "up": "{\\an5\\pos(540,%d)\\fscx70\\fscy70\\fad(100,60)\\t(0,180,0.5,\\fscx100\\fscy100)}" % MINIMAL_FAITH_POS_Y,
-    "blur_slide_up": "{\\an5\\move(540,%d,540,%d,0,200)\\blur10\\fad(120,60)\\t(0,200,0.5,\\blur0.6)}" % (MINIMAL_FAITH_POS_Y + 45, MINIMAL_FAITH_POS_Y),
-    "slide_right": "{\\an5\\move(505,%d,540,%d,0,220)\\blur4\\fad(110,60)\\t(0,220,0.5,\\blur0.6)}" % (MINIMAL_FAITH_POS_Y, MINIMAL_FAITH_POS_Y),
-}
+def _minimal_faith_anims(pos_y: int = MINIMAL_FAITH_POS_Y) -> dict:
+    return {
+        "up": "{\\an5\\pos(540,%d)\\fscx70\\fscy70\\fad(100,60)\\t(0,180,0.5,\\fscx100\\fscy100)}" % pos_y,
+        "blur_slide_up": "{\\an5\\move(540,%d,540,%d,0,200)\\blur10\\fad(120,60)\\t(0,200,0.5,\\blur0.6)}" % (pos_y + 45, pos_y),
+        "slide_right": "{\\an5\\move(505,%d,540,%d,0,220)\\blur4\\fad(110,60)\\t(0,220,0.5,\\blur0.6)}" % (pos_y, pos_y),
+    }
+
 
 
 def _fmt_ass_time(seconds: float) -> str:
@@ -177,7 +200,9 @@ def _fmt_ass_time(seconds: float) -> str:
     return f"{h:d}:{m:02d}:{s:05.2f}"
 
 
-def _build_ass_header(preset: dict) -> str:
+def _build_ass_header(preset: dict, out_h: int = PORTRAIT_HEIGHT) -> str:
+    # Scale is fixed to the portrait reference (not out_h) so text keeps its
+    # size relative to the 1080px width on shorter 1:1/4:5 canvases.
     scale = PORTRAIT_HEIGHT / STYLE_REFERENCE_HEIGHT
     fontsize = round(preset["fontsize"] * scale)
     outline = round(preset["outline"] * scale, 1)
@@ -187,7 +212,7 @@ def _build_ass_header(preset: dict) -> str:
     return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {PORTRAIT_WIDTH}
-PlayResY: {PORTRAIT_HEIGHT}
+PlayResY: {out_h}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
@@ -248,6 +273,7 @@ def generate_ass(
     end: float,
     emphasis_words: list[str],
     preset_name: str = DEFAULT_PRESET,
+    out_h: int = PORTRAIT_HEIGHT,
 ) -> str:
     """Build ASS subtitle content for the clip [start, end), word-by-word karaoke highlight."""
     preset = STYLE_PRESETS.get(preset_name, STYLE_PRESETS[DEFAULT_PRESET])
@@ -265,7 +291,7 @@ def generate_ass(
 
     lines = _group_into_lines(words)
 
-    ass = _build_ass_header(preset)
+    ass = _build_ass_header(preset, out_h)
     for line_words in lines:
         line_start = max(0.0, line_words[0]["start"] - start)
         line_end = max(line_start, line_words[-1]["end"] - start)
@@ -302,6 +328,7 @@ def generate_static_overlay_ass(
     duration: float,
     style: dict = PINNED_LINE_STYLE,
     start: float = 0.0,
+    out_h: int = PORTRAIT_HEIGHT,
 ) -> str:
     """Build a standalone ASS file with ONE static dialogue line spanning
     [start, duration) — the single strongest verbatim line, pinned at the
@@ -332,12 +359,12 @@ def generate_static_overlay_ass(
             parts.append(word)
     text = " ".join(parts)
 
-    ass = _build_ass_header(style)
+    ass = _build_ass_header(style, out_h)
     ass += f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(duration)},Default,,0,0,0,,{text}\n"
     return ass
 
 
-def _build_minimal_faith_header() -> str:
+def _build_minimal_faith_header(out_h: int = PORTRAIT_HEIGHT) -> str:
     # Not built via _build_ass_header: that function scales preset values
     # against STYLE_REFERENCE_HEIGHT for the karaoke presets, but the
     # minimal-faith values above are already tuned directly against the
@@ -346,7 +373,7 @@ def _build_minimal_faith_header() -> str:
     return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {PORTRAIT_WIDTH}
-PlayResY: {PORTRAIT_HEIGHT}
+PlayResY: {out_h}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
@@ -469,6 +496,7 @@ def generate_minimal_faith_ass(
     end: float,
     emphasis_words: list[str],
     capitalize_divine_pronouns: Optional[list[str]] = None,
+    out_h: int = PORTRAIT_HEIGHT,
 ) -> str:
     """Build ASS content for the "minimal-faith" style: short animated
     phrases (2-4 words) instead of per-word karaoke, centered lower-middle,
@@ -487,14 +515,16 @@ def generate_minimal_faith_ass(
     at the risk of mis-capitalizing an unrelated "he"."""
     words = _segment_words_in_range(segments, start, end)
     if not words:
-        return _build_minimal_faith_header()
+        return _build_minimal_faith_header(out_h)
     if words[0]["start"] - start < FIRST_CAPTION_DELAY:
         words[0] = {**words[0], "start": start + FIRST_CAPTION_DELAY}
 
     phrases = _group_into_phrases(words, emphasis_words)
     cap_set = {w.lower() for w in (capitalize_divine_pronouns or [])}
+    # Same relative height (75% down) on any canvas.
+    anims = _minimal_faith_anims(round(out_h * MINIMAL_FAITH_POS_Y / PORTRAIT_HEIGHT))
 
-    ass = _build_minimal_faith_header()
+    ass = _build_minimal_faith_header(out_h)
     alt = 0
     for i, phrase in enumerate(phrases):
         p_start = max(0.0, phrase[0]["start"] - start)
@@ -504,9 +534,9 @@ def generate_minimal_faith_ass(
 
         ei = _phrase_emph_index(phrase, emphasis_words)
         if ei is not None:
-            anim = _MINIMAL_FAITH_ANIMS["up"]
+            anim = anims["up"]
         else:
-            anim = _MINIMAL_FAITH_ANIMS["blur_slide_up" if alt % 2 == 0 else "slide_right"]
+            anim = anims["blur_slide_up" if alt % 2 == 0 else "slide_right"]
             alt += 1
 
         rendered_lines = []
@@ -564,6 +594,9 @@ def render_minimal_faith_clip(
     riser_path: Optional[str] = None,
     comment_bait_question: Optional[str] = None,
     add_captions: bool = True,
+    aspect: str = DEFAULT_ASPECT,
+    follow_speaker: bool = True,
+    speaker_turns: Optional[list[dict]] = None,
 ) -> str:
     """Render the "minimal-faith" deliverable: generate_minimal_faith_ass's
     captions plus the edit effects from the prototype — a zoom-out opener,
@@ -584,26 +617,32 @@ def render_minimal_faith_clip(
 
     add_captions=False skips the karaoke captions, keeping the zoom/grade/
     music/SFX bundle — for callers who'll add their own subtitle template by
-    hand in Resolve instead."""
+    hand in Resolve instead.
+
+    aspect picks the canvas (ASPECTS). follow_speaker uses reframe.py's
+    face-following crop instead of a fixed center crop; speaker_turns
+    (diarize.py, clip-relative) lets it follow whoever is talking."""
     os.makedirs(output_dir, exist_ok=True)
     duration = end - start
+    out_w, out_h = aspect_dims(aspect)
 
-    tag = clip_tag(filepath, start, end, MINIMAL_FAITH_PRESET)
+    tag = clip_tag(filepath, start, end, MINIMAL_FAITH_PRESET, aspect)
     out_path = os.path.join(output_dir, f"{tag}_captioned.mp4" if add_captions else f"{tag}.mp4")
 
-    vf = ["crop=ih*9/16:ih:(iw-ih*9/16)/2:0", f"scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}:flags=lanczos"]
+    crop, cleanup = _crop_chain(filepath, start, end, output_dir, tag, aspect, follow_speaker, speaker_turns)
+    vf = [crop, f"scale={out_w}:{out_h}:flags=lanczos"]
     if zoom_opener:
         zf = int(round(MINIMAL_FAITH_ZOOM_SECS * 29.97))
         z = f"1+{MINIMAL_FAITH_ZOOM_FROM - 1:.3f}*pow(1-min(on/{zf},1),3)"
         vf.append(
             f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:"
-            f"s={PORTRAIT_WIDTH}x{PORTRAIT_HEIGHT}:fps=30000/1001"
+            f"s={out_w}x{out_h}:fps=30000/1001"
         )
     if bw_grade:
         vf.append("hue=s=0,eq=contrast=1.08")
     if add_captions:
         ass_path = os.path.join(output_dir, f"{tag}.ass")
-        ass_content = generate_minimal_faith_ass(segments, start, end, emphasis_words)
+        ass_content = generate_minimal_faith_ass(segments, start, end, emphasis_words, out_h=out_h)
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(ass_content)
         escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
@@ -615,7 +654,7 @@ def render_minimal_faith_clip(
         bait_ass_path = os.path.join(output_dir, f"{tag}_bait.ass")
         bait_start = max(0.0, duration - COMMENT_BAIT_TRAILING_SECONDS)
         bait_ass_content = generate_static_overlay_ass(
-            comment_bait_question, [], duration, style=COMMENT_BAIT_STYLE, start=bait_start,
+            comment_bait_question, [], duration, style=COMMENT_BAIT_STYLE, start=bait_start, out_h=out_h,
         )
         with open(bait_ass_path, "w", encoding="utf-8") as f:
             f.write(bait_ass_content)
@@ -683,6 +722,7 @@ def render_minimal_faith_clip(
         out_path,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    _remove(cleanup)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg minimal-faith render failed: {result.stderr[-2000:]}")
 
@@ -694,13 +734,40 @@ def clip_tag(
     start: float,
     end: float,
     preset_name: str = DEFAULT_PRESET,
+    aspect: str = DEFAULT_ASPECT,
 ) -> str:
     """The deterministic filename tag burn_captions derives its output paths
     from. Shared here so callers that need to derive a *companion* filename
     for the same clip (cleanup in commentary_render.py) call this instead of
-    duplicating the formula and risking drift if it ever changes."""
+    duplicating the formula and risking drift if it ever changes. The
+    default 9:16 keeps the pre-aspect-option names."""
     base = os.path.splitext(os.path.basename(filepath))[0]
-    return f"{base}_{start:.1f}-{end:.1f}_{preset_name}"
+    suffix = "" if aspect == DEFAULT_ASPECT else "_" + aspect.replace(":", "x")
+    return f"{base}_{start:.1f}-{end:.1f}_{preset_name}{suffix}"
+
+
+def _crop_chain(
+    filepath: str,
+    start: float,
+    end: float,
+    work_dir: str,
+    tag: str,
+    aspect: str,
+    follow_speaker: bool,
+    speaker_turns: Optional[list[dict]],
+) -> tuple[str, list[str]]:
+    ratio = _aspect_ratio(aspect)
+    if not follow_speaker:
+        return reframe.center_crop_filter(ratio), []
+    return reframe.crop_filter(filepath, start, end, work_dir, tag, ratio, speaker_turns)
+
+
+def _remove(paths: list[str]) -> None:
+    for p in paths:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
 
 
 def burn_captions(
@@ -715,11 +782,14 @@ def burn_captions(
     pinned_line_emphasis: Optional[list[str]] = None,
     comment_bait_question: Optional[str] = None,
     add_captions: bool = True,
+    aspect: str = DEFAULT_ASPECT,
+    follow_speaker: bool = True,
+    speaker_turns: Optional[list[dict]] = None,
 ) -> str:
     """Trim [start, end) from filepath, burn word-by-word ASS captions, write
-    to output_dir. Center-crops the landscape source to fill the 9:16
+    to output_dir. Crops the landscape source to fill the 9:16
     portrait canvas edge-to-edge (no letterbox bars) — the standard
-    full-bleed vertical-video look.
+    full-bleed vertical-video look — following the speaker's face.
 
     pinned_line (with pinned_line_emphasis), when given, adds a second,
     independent static overlay — the clip's single strongest verbatim line,
@@ -736,18 +806,21 @@ def burn_captions(
     comment_bait_question entirely, producing just the reframed clip — for
     callers who'll add their own subtitle template by hand in Resolve
     instead.
+
+    aspect/follow_speaker/speaker_turns: see render_minimal_faith_clip.
     """
     os.makedirs(output_dir, exist_ok=True)
+    out_w, out_h = aspect_dims(aspect)
 
-    tag = clip_tag(filepath, start, end, preset_name)
+    tag = clip_tag(filepath, start, end, preset_name, aspect)
     out_path = os.path.join(output_dir, f"{tag}_captioned.mp4" if add_captions else f"{tag}.mp4")
 
     duration = end - start
-    # Center-crop landscape source to 9:16 (discards left/right, keeps full
-    # height), then scale to the portrait delivery resolution before burning
-    # captions.
-    crop = "crop=ih*9/16:ih:(iw-ih*9/16)/2:0"
-    scale = f"scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}"
+    # Crop the source to the target aspect (following the speaker when we
+    # can find one, else centered), then scale to the delivery resolution
+    # before burning captions.
+    crop, cleanup = _crop_chain(filepath, start, end, output_dir, tag, aspect, follow_speaker, speaker_turns)
+    scale = f"scale={out_w}:{out_h}"
 
     def _escape_ass_path(p: str) -> str:
         return p.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
@@ -759,14 +832,14 @@ def burn_captions(
     ass_stages = []
     if add_captions:
         ass_path = os.path.join(output_dir, f"{tag}.ass")
-        ass_content = generate_ass(segments, start, end, emphasis_words, preset_name)
+        ass_content = generate_ass(segments, start, end, emphasis_words, preset_name, out_h=out_h)
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(ass_content)
         ass_stages.append(f"ass={_escape_ass_path(ass_path)}")
 
         if pinned_line:
             pinned_ass_path = os.path.join(output_dir, f"{tag}_pinned.ass")
-            pinned_ass_content = generate_static_overlay_ass(pinned_line, pinned_line_emphasis or [], duration)
+            pinned_ass_content = generate_static_overlay_ass(pinned_line, pinned_line_emphasis or [], duration, out_h=out_h)
             with open(pinned_ass_path, "w", encoding="utf-8") as f:
                 f.write(pinned_ass_content)
             # Chaining a second `ass=` stage burns it in on top of whatever the
@@ -779,7 +852,7 @@ def burn_captions(
         bait_ass_path = os.path.join(output_dir, f"{tag}_bait.ass")
         bait_start = max(0.0, duration - COMMENT_BAIT_TRAILING_SECONDS)
         bait_ass_content = generate_static_overlay_ass(
-            comment_bait_question, [], duration, style=COMMENT_BAIT_STYLE, start=bait_start,
+            comment_bait_question, [], duration, style=COMMENT_BAIT_STYLE, start=bait_start, out_h=out_h,
         )
         with open(bait_ass_path, "w", encoding="utf-8") as f:
             f.write(bait_ass_content)
@@ -798,6 +871,7 @@ def burn_captions(
     # See commentary_render._run_ffmpeg for why encoding is explicit here —
     # ffmpeg's stderr can echo non-ASCII bytes from the ASS content/path.
     result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    _remove(cleanup)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg caption burn-in failed: {result.stderr[-2000:]}")
 
