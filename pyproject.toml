@@ -9,7 +9,8 @@ description = "Find the short clips worth posting in a long video, frame them fo
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "src/clippers/assets/fonts/OFL-*.txt"]
-requires-python = ">=3.9"
+# Capped at 3.13: ctranslate2 (faster-whisper) has no wheels for newer Pythons yet.
+requires-python = ">=3.9,<3.14"
 authors = [{ name = "aadedolapo" }]
 keywords = ["video", "shorts", "reels", "tiktok", "davinci-resolve", "clips", "whisper", "claude"]
 classifiers = [

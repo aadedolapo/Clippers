@@ -4,12 +4,12 @@ Thanks for helping out. Bug reports, fixes and new ideas are all welcome.
 
 ## Setting up
 
-You need Python 3.9+ and [ffmpeg](https://ffmpeg.org/) on your `PATH`.
+You need Python 3.9–3.13 and [ffmpeg](https://ffmpeg.org/) on your `PATH`.
 
 ```bash
 git clone https://github.com/aadedolapo/Clippers.git
 cd Clippers
-python3 -m venv venv
+python3.13 -m venv venv         # any Python 3.9–3.13
 source venv/bin/activate
 pip install -e ".[dev]"          # add ,diarization to work on speaker diarization
 clippers init                    # creates ~/Clippers and a .env to fill in
@@ -28,7 +28,7 @@ ruff check src tests     # lint (ruff check --fix sorts imports for you)
 pytest                   # tests; they run against a throwaway home folder
 ```
 
-CI runs both on Python 3.9 and 3.12.
+CI runs both on Python 3.9 and 3.13.
 
 - **Keep it working on Python 3.9.** Use `Optional[str]` rather than `str | None`.
 - **Add a test** for logic you change. Anything that doesn't need ffmpeg, Resolve or an API key should be testable; see `tests/test_send_fallback.py` for faking those out.
