@@ -864,8 +864,8 @@ function createSession(name, insertAt) {
     retryBtn.disabled = dismissBtn.disabled = true;
     try {
       const res = await fetch(`/jobs/${jobId}/retry`, { method: "POST" });
-      if (!res.ok) throw new Error(`retry failed (${res.status})`);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `retry failed (${res.status})`);
       setError(null);
       retryBar.style.display = "none";
       statusEl.textContent = "Starting…";
@@ -1035,8 +1035,9 @@ function startSession(file, titleOverride, sourceOverride) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error(`analyze request failed (${res.status})`);
-      const { job_id } = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `analyze request failed (${res.status})`);
+      const { job_id } = data;
       session.poll(job_id);
     } catch (e) {
       session.setStatus("Error");

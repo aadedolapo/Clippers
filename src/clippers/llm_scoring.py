@@ -435,6 +435,8 @@ def score_all_windows(
     batches = list(_chunk(windows, SCORING_BATCH_SIZE))
 
     scored = []
+    failed = 0
+    last_error = None
     with ThreadPoolExecutor(max_workers=SCORING_CONCURRENCY) as executor:
         future_to_batch = {executor.submit(score_batch, client, b, lengths): b for b in batches}
         for future in as_completed(future_to_batch):
@@ -442,7 +444,14 @@ def score_all_windows(
             try:
                 scored.extend(future.result())
             except Exception as e:
+                failed += 1
+                last_error = e
                 print(f"  [warn] scoring failed for batch starting [{b[0]['start']:.1f}s]: {e}")
+    # One bad batch just loses a few candidates, but when every batch fails
+    # (bad key, no credit, network down) the job would otherwise finish as
+    # "done" with no clips and no hint why.
+    if batches and failed == len(batches):
+        raise RuntimeError(f"Claude scoring failed for every batch: {last_error}")
     return scored
 
 

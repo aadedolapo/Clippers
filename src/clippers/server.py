@@ -283,10 +283,20 @@ async def upload(file: UploadFile = File(...)):
     return {"local_file": dest, "title": stem}
 
 
+def _require_api_key():
+    """Scoring needs Claude, so refuse up front rather than after the
+    download and transcription, which can take minutes."""
+    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        raise HTTPException(status_code=400, detail=(
+            f"ANTHROPIC_API_KEY isn't set. Add it to {paths.ENV_FILE}, then restart `clippers serve`."
+        ))
+
+
 @app.post("/analyze")
 def analyze(req: AnalyzeRequest):
     if bool(req.url) == bool(req.local_file):
         raise HTTPException(status_code=400, detail="Provide exactly one of 'url' or 'local_file'")
+    _require_api_key()
 
     job_id = _submit_job(local_file=req.local_file, url=req.url, title=req.title,
                          source=req.source, long_form=req.long_form)
@@ -326,6 +336,7 @@ def retry_job(job_id: str):
     job = _failed_job(job_id)
     if job.get("retried_as"):
         raise HTTPException(status_code=400, detail="job was already retried")
+    _require_api_key()
     # Reuse the copy already in downloads/ when the first run got that far,
     # so the retry keeps the same video_id instead of making a second copy.
     copied = job.get("filepath") if job.get("filepath") and os.path.exists(job["filepath"]) else None
