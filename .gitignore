@@ -1,19 +1,24 @@
+# Python
 venv/
+.venv/
 __pycache__/
 *.pyc
-backend/.env
-backend/downloads/
-backend/data/
-backend/assets/
-output/
-*.aiff
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Local settings (the real ones live in ~/Clippers/.env)
+.env
+
+# Editors and OS
 .claude/
 .DS_Store
+
+# Local planning notes
 CLAUDE_CODE_TEST_RUN.md
+CLIPPERS_IMPROVEMENTS.md
 RETENTION_UPGRADE_PLAN.md
 prd.md
 viral-clipper-prd.md
-backend/eval/clips.json
-backend/eval/results.jsonl
-.pytest_cache/
-*.md
