@@ -4,7 +4,7 @@
 
 ### Long video in. Scroll-stopping Shorts out. Straight onto your DaVinci Resolve timeline.
 
-Clippers finds the moments in a sermon, talk or podcast that work on their own as a short clip. It ranks them on hook, payoff, loudness and visuals, re-cuts them so they open clean, and frames the speaker in 9:16. Your picks land in DaVinci Resolve as a timeline that's ready to edit.
+Clippers finds the moments in a talk, sermon, podcast or interview that work on their own as a short clip. It ranks them on hook, payoff, loudness and visuals, re-cuts them so they open clean, and frames the speaker in 9:16. Your picks land in DaVinci Resolve as a timeline that's ready to edit.
 
 ![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-backend-009688?logo=fastapi&logoColor=white)
@@ -12,8 +12,10 @@ Clippers finds the moments in a sermon, talk or podcast that work on their own a
 ![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-scripting%20API-233A51)
 ![ffmpeg](https://img.shields.io/badge/ffmpeg-required-007808?logo=ffmpeg&logoColor=white)
 ![Local only](https://img.shields.io/badge/runs-100%25%20local-555)
+[![CI](https://github.com/aadedolapo/Clippers/actions/workflows/ci.yml/badge.svg)](https://github.com/aadedolapo/Clippers/actions/workflows/ci.yml)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
-[Quick start](#-quick-start) · [How it works](#-how-it-works) · [Using it](#%EF%B8%8F-using-it) · [Daily workflow](#-daily-workflow) · [Configuration](#%EF%B8%8F-configuration) · [Troubleshooting](#-troubleshooting)
+[Quick start](#-quick-start) · [How it works](#-how-it-works) · [Using it](#%EF%B8%8F-using-it) · [Daily workflow](#-daily-workflow) · [Configuration](#%EF%B8%8F-configuration) · [Troubleshooting](#-troubleshooting) · [Contributing](#-contributing)
 
 </div>
 
@@ -51,18 +53,33 @@ Clippers finds the moments in a sermon, talk or podcast that work on their own a
 ### Install
 
 ```bash
-git clone <this repo>
-cd Clippers
-python3 -m venv venv
-source venv/bin/activate
-pip install -r backend/requirements.txt
-cp backend/.env.example backend/.env
+pipx install git+https://github.com/aadedolapo/Clippers.git
 ```
 
-Then put your key in `backend/.env`:
+[pipx](https://pipx.pypa.io/) installs it in its own environment and puts the `clippers` command on your path. Plain `pip install git+https://github.com/aadedolapo/Clippers.git` inside a virtual environment works too. For speaker diarization, add the extra (it pulls in PyTorch, several GB):
+
+```bash
+pipx install "clippers[diarization] @ git+https://github.com/aadedolapo/Clippers.git"
+```
+
+### Set up
+
+```bash
+clippers init      # creates ~/Clippers and ~/Clippers/.env
+```
+
+Put your key in `~/Clippers/.env`, and tell it what your channel is about (optional, see [Your channel](#-your-channel)):
 
 ```ini
 ANTHROPIC_API_KEY=sk-ant-...
+CHANNEL_DESCRIPTION=a faith and self-improvement channel for young men
+CHANNEL_LANES=faith, men's growth, discipline, purpose
+```
+
+Then check everything is in place:
+
+```bash
+clippers doctor
 ```
 
 If you use Resolve, turn on scripting once: **Preferences → System → General → External scripting using: Local**.
@@ -70,18 +87,25 @@ If you use Resolve, turn on scripting once: **Preferences → System → General
 ### Run
 
 1. If you're using Resolve, open it and load a project.
-2. In Terminal, start the server:
+2. Start the app:
 
    ```bash
-   cd Clippers/backend
-   ../venv/bin/python main.py
+   clippers serve
    ```
-
-   It's ready when you see `Uvicorn running on http://127.0.0.1:8000`. (If you've run `source venv/bin/activate` in that window, plain `python main.py` works too.)
 
 3. Open **http://localhost:8000** in your browser.
 
-That one server runs everything, so there's nothing else to start. Leave the Terminal window open while you work. Press **Ctrl + C** there to stop it, and run the same command again to restart it after pulling changes.
+That one command runs everything. Leave the terminal open while you work, and press **Ctrl + C** to stop it. Use `clippers serve --port 8001` if port 8000 is taken.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `clippers init` | Create the home folder and a `.env` to fill in |
+| `clippers serve` | Start the app (`--host`, `--port`) |
+| `clippers doctor` | Check ffmpeg, the API key, Resolve and the optional extras |
+| `clippers report` | Posted-clip performance by lane, duration and cold open |
+| `clippers eval` | Score-vs-retention eval (see [Measuring the scorer](#-measuring-the-scorer)) |
 
 ---
 
@@ -106,14 +130,14 @@ flowchart LR
 
 <br/>
 
-Each candidate gets a scorecard from Claude, plus two measured signals. They're combined with the weights in `backend/scoring.py`:
+Each candidate gets a scorecard from Claude, plus two measured signals. They're combined with the weights in `src/clippers/scoring.py`:
 
 | Signal | Weight | Source |
 |---|:---:|---|
 | **Hook pass**: would the first line stop a scroll? | `0.315` | Claude (pass/fail) |
 | **Payoff**: does it land? | `0.18` | Claude (0–10) |
 | **Standalone**: does it make sense with no context? | `0.135` | Claude (0–10) |
-| **Lane fit**: faith, men's growth, discipline, purpose | `0.135` | Claude (0–10) |
+| **Lane fit**: does it match your channel's topics? | `0.135` | Claude (0–10) |
 | **Visual**: first-frame strength and visual energy | `0.10` | Claude, from frames |
 | **Loopability**: does the ending flow back into the start? | `0.09` | Claude (0–10) |
 | **Audio energy**: loudness and dynamics | `0.045` | librosa |
@@ -141,7 +165,7 @@ Camera cuts are detected once per video and cached as `<video>.shots.json`. Dete
 
 <br/>
 
-The `output/` mp4 samples 5 frames a second and finds faces with OpenCV's YuNet. The model is downloaded once to `backend/assets/models/`. The camera path is smoothed in these ways:
+The `output/` mp4 samples 5 frames a second and finds faces with OpenCV's YuNet. The model is downloaded once to `~/Clippers/models/`. The camera path is smoothed in these ways:
 
 - a **dead zone**, so small head movements don't move the frame;
 - an **EMA and moving average**, so moves are gentle;
@@ -161,7 +185,8 @@ In Resolve, **Studio** uses Smart Reframe. **Free** Resolve gets a static pan to
 If you add a Hugging Face token, pyannote labels who says what. The scorer sees lines like `(SPEAKER_01)`. When two people are on screen, the crop follows whoever is talking, chosen by mouth movement.
 
 1. Accept the model terms for [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0).
-2. Set `HF_TOKEN=` in `backend/.env`.
+2. Install the extra: `pipx install "clippers[diarization] @ git+https://github.com/aadedolapo/Clippers.git"` (or `pip install -e ".[diarization]"` in a checkout).
+3. Set `HF_TOKEN=` in `~/Clippers/.env`.
 
 It's slow on CPU: several minutes per hour of audio. Results are cached as `<video>.diarization.json`. Without a token, everything runs exactly as before.
 
@@ -171,7 +196,7 @@ It's slow on CPU: several minutes per hour of audio. Results are cached as `<vid
 
 ## 🖱️ Using it
 
-1. **Upload.** Pick one or more videos in the browser. With a single file you can also give it a title and the church or speaker it's from. Several files queue up and are analyzed two at a time.
+1. **Upload.** Pick one or more videos in the browser. With a single file you can also give it a title and where it's from (channel, church, speaker). Several files queue up and are analyzed two at a time.
 2. **Choose a length.** Leave it on Shorts (15–45s), or tick **Long-form clips** for 45–90s story clips.
 3. **Analyze.** It transcribes, finds camera cuts, scores and reranks. This takes a few minutes, depending on video length. If it fails, click **Retry** on its card (see [Jobs survive restarts](#-jobs-survive-restarts)).
 4. **Review the cards.** Each card shows:
@@ -186,10 +211,10 @@ It's slow on CPU: several minutes per hour of audio. Results are cached as `<vid
    |---|---|
    | **Clip style** | Minimal Faith (zoom-out opener, optional B&W, music bed) or Plain |
    | **Cold open** | Flash-forwards the clip's strongest line to the very start (Plain only) |
-   | **Wisement outro** | A short spoken close and a follow CTA |
-   | **Burn captions** | Burns captions into the `output/` mp4 (the timeline never gets them) |
+   | **Spoken outro** | A short narrated close after the clip (needs `ELEVENLABS_API_KEY`) |
+   | **Burn captions** | Burns captions into the mp4 (the timeline never gets them) |
    | **Follow speaker** | Speaker-tracking crop. Untick it for a center crop. |
-   | **Aspect** | 9:16, 4:5 or 1:1 for the `output/` mp4 |
+   | **Aspect** | 9:16, 4:5 or 1:1 for the mp4 |
    | **B-roll** / **Beat plan** | On-demand Pexels B-roll suggestions and an editorial beat map |
 
 6. **Send to Resolve.** For each clip, the backend:
@@ -197,7 +222,7 @@ It's slow on CPU: several minutes per hour of audio. Results are cached as `<vid
    - creates or reuses a 9:16 timeline named `Viral Clips - <title>`;
    - appends the trimmed clip, zoomed to fill, and Smart Reframes it;
    - adds the music bed (A2) and the whoosh (A3) as real audio tracks;
-   - renders a separate **ready-to-post mp4** into `output/`.
+   - renders a separate **ready-to-post mp4** into `~/Clippers/output/`.
 
    **No Resolve? Still click Send to Resolve.** If Resolve isn't installed, isn't open, or doesn't allow scripting (which may be the case on the free version), the clip is rendered as an mp4 anyway. Its card shows a yellow note with the file path, and you can finish the edit in any editor. The mp4 has the reframe, style effects, music, captions (if ticked), cold open and outro baked in. B-roll is the one thing that only goes on the Resolve timeline.
 7. **Switch to Resolve.** Review, tighten and export. For native, editable captions, drag in your animated subtitle template (Effects Library → Titles → Subtitles) once per timeline.
@@ -214,18 +239,18 @@ The retention data points at one bottleneck: **viewers swipe away in the first s
  3–4 videos ──▶ analyze all ──▶ Today's picks ──▶ gut-check top 2 ──▶ post 1–2/day ──▶ log stats at 48h
 ```
 
-1. **Pick 3–4 on-lane source videos** (faith, men's growth, discipline, purpose). Prefer speakers who haven't been clipped much.
+1. **Pick 3–4 source videos** that fit your channel's lanes. Prefer speakers who haven't been clipped much.
 2. **Analyze all of them.** Then open **Today's picks**. It ranks every clip from the day across all videos, drops anything that fails the hook check, and takes at most one per lane.
 3. **Gut-check the top 2.** Does the first second make *you* stop?
 4. **Send to Resolve, finish, post 1–2 a day**, a few hours apart.
 5. **After 48h**, click **Mark as posted** and log stayed-to-watch % and views. You can also import a YouTube Studio CSV each week (Content → Shorts → Export).
-6. **Every 2 weeks**, run `python backend/performance.py report` and tune `WEIGHTS`. Once you have 10+ posted clips with stats, the scorer uses your best and worst hooks as examples automatically.
+6. **Every 2 weeks**, run `clippers report` and tune `WEIGHTS` in `scoring.py`. Once you have 10+ posted clips with stats, the scorer uses your best and worst hooks as examples automatically.
 
 ---
 
 ## 💾 Jobs survive restarts
 
-Every analysis job is saved to `backend/data/jobs/<job_id>.json`. After a restart, **Send to Resolve, B-roll and beat plans keep working** on anything you analyzed before. If an analysis fails, or is cut off by a restart, it shows on the main page with **Retry** and **Dismiss** buttons. Retry runs the analysis again on the same video with the same settings: the transcript and Claude scoring run again, while camera cuts and speaker turns come from cache. Dismiss hides it. Analyses still running when you refresh the page reappear and keep updating.
+Every analysis job is saved to `~/Clippers/data/jobs/<job_id>.json`. After a restart, **Send to Resolve, B-roll and beat plans keep working** on anything you analyzed before. If an analysis fails, or is cut off by a restart, it shows on the main page with **Retry** and **Dismiss** buttons. Retry runs the analysis again on the same video with the same settings: the transcript and Claude scoring run again, while camera cuts and speaker turns come from cache. Dismiss hides it. Analyses still running when you refresh the page reappear and keep updating.
 
 ---
 
@@ -233,9 +258,10 @@ Every analysis job is saved to `backend/data/jobs/<job_id>.json`. After a restar
 
 | Problem | Fix |
 |---|---|
-| `address already in use` when starting | Another server is already on port 8000. Stop it with `lsof -ti:8000 \| xargs kill`, then start again. |
+| Not sure what's wrong | Run `clippers doctor`. It checks ffmpeg, your API key, the home folder and Resolve. |
+| `address already in use` when starting | Something else is on port 8000. Use `clippers serve --port 8001`, or stop the other server (macOS/Linux: `lsof -ti:8000 \| xargs kill`). |
 | Yellow *Not sent to Resolve* note on a clip | The mp4 was still rendered, at the path shown. To get the timeline too, open Resolve with a project loaded, check **External scripting using: Local** in Preferences → System → General, and send again. |
-| *Could not import DaVinciResolveScript* | Resolve's scripting files aren't where the backend looks. Reinstall Resolve or check `resolve_integration.py`'s paths. |
+| *Could not import DaVinciResolveScript* | Resolve's scripting files aren't in the standard place for your OS. Reinstall Resolve, or check the paths in `resolve_integration.py`. |
 | Clips in Resolve aren't Smart Reframed | Smart Reframe needs Resolve **Studio**. Free Resolve gets a static pan instead. |
 | *Interrupted* on a video card | The server stopped mid-analysis. Click **Retry**. |
 | No whoosh or music | `SFX_DIR` / `MUSIC_DIRS` aren't set or point at empty folders. Both skip silently. |
@@ -246,7 +272,18 @@ Every analysis job is saved to `backend/data/jobs/<job_id>.json`. After a restar
 
 ## ⚙️ Configuration
 
-Everything lives in `backend/.env`. Only `ANTHROPIC_API_KEY` is required. Every other feature skips itself if it isn't configured.
+Settings live in `~/Clippers/.env` (created by `clippers init`). A `.env` in the folder you run `clippers` from is read first, and real environment variables beat both. Only `ANTHROPIC_API_KEY` is required; every other feature skips itself if it isn't configured.
+
+### 📺 Your channel
+
+Two settings tune the scorer and the commentary to your channel:
+
+```ini
+CHANNEL_DESCRIPTION=a faith and self-improvement channel for young men
+CHANNEL_LANES=faith, men's growth, discipline, purpose
+```
+
+**Lanes** are your channel's core topics. Claude rates how well each clip fits them (the *lane fit* score) and tags it with one, and Today's picks takes at most one clip per lane so your top picks aren't all the same topic. Leave both empty for a general-purpose channel: clips are then rated on broad appeal and tagged with a free-form topic.
 
 <details open>
 <summary><b>Core</b></summary>
@@ -254,6 +291,9 @@ Everything lives in `backend/.env`. Only `ANTHROPIC_API_KEY` is required. Every 
 | Variable | Default | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | **Required.** Claude API key |
+| `CLIPPERS_HOME` | `~/Clippers` | Where data, output and `.env` live (set it in your shell, not in that `.env`) |
+| `CHANNEL_DESCRIPTION` | — | What the channel is about |
+| `CHANNEL_LANES` | — | Comma-separated core topics |
 | `WHISPER_MODEL_SIZE` | `small` | faster-whisper model size |
 
 </details>
@@ -302,16 +342,16 @@ Everything lives in `backend/.env`. Only `ANTHROPIC_API_KEY` is required. Every 
 ### 🎵 Music & SFX
 
 - **Music beds** are picked at random by mood from your own library, skipping the last 5 used. They're mixed at about −28 LUFS under the voice at −15 LUFS, and sidechain-ducked whenever the speaker talks.
-- **Whoosh** plays on the zoom-out opener. `SFX_DIR` is indexed once into `backend/data/sfx_index.json`. Delete that file to re-index after adding sounds.
+- **Whoosh** plays on the zoom-out opener. `SFX_DIR` is indexed once into `~/Clippers/data/sfx_index.json`. Delete that file to re-index after adding sounds.
 
 ### 🔤 Captions
 
-Captions are **off by default**, so you can use your own animated template in Resolve. Tick **Burn captions** on a clip to burn them into its `output/` mp4:
+Captions are **off by default**, so you can use your own animated template in Resolve. Tick **Burn captions** on a clip to burn them into its mp4:
 
 - **Minimal Faith** gets phrase captions.
 - **Plain** gets word-by-word karaoke captions.
 
-Fonts, colors and timings are in `backend/captions.py`. The bundled fonts are Montserrat and Playfair Display.
+Fonts, colors and timings are in `src/clippers/captions.py`. The bundled fonts are Montserrat and Playfair Display, both under the SIL Open Font License.
 
 ---
 
@@ -320,13 +360,13 @@ Fonts, colors and timings are in `backend/captions.py`. The bundled fonts are Mo
 Run this before and after any change to `WEIGHTS` or the scoring prompt. It checks that the scorer still ranks the clips that **actually held viewers** higher.
 
 ```bash
-venv/bin/python backend/eval/run_eval.py export                       # posted clips with stayed % → eval/clips.json
-venv/bin/python backend/eval/run_eval.py --weights-only               # re-weight stored scorecards (free, instant)
-venv/bin/python backend/eval/run_eval.py --note "what I changed"      # re-score with the current prompt (API calls)
-venv/bin/python backend/eval/run_eval.py --visual                     # …including the visual rerank
+clippers eval export                     # posted clips with stayed % → ~/Clippers/eval/clips.json
+clippers eval --weights-only             # re-weight stored scorecards (free, instant)
+clippers eval --note "what I changed"    # re-score with the current prompt (API calls)
+clippers eval --visual                   # …including the visual rerank
 ```
 
-Each run prints the **Spearman correlation** between score and stayed-to-watch %, overall and per lane and duration bucket. It appends the result, the git commit and the weights to `backend/eval/results.jsonl`, so you can compare runs over time.
+Each run prints the **Spearman correlation** between score and stayed-to-watch %, overall and per lane and duration bucket. It appends the result, the version, the git commit and the weights to `~/Clippers/eval/results.jsonl`, so you can compare runs over time.
 
 ### 🔌 API
 
@@ -334,25 +374,28 @@ The page talks to these endpoints, so you can script against them too.
 
 | Endpoint | What it does |
 |---|---|
-| `POST /upload` | Save a video into `backend/downloads/` |
+| `POST /upload` | Save a video into `~/Clippers/downloads/` |
 | `POST /analyze` | Start an analysis (`local_file` or `url`, optional `title`, `source`, `long_form`) |
 | `GET /status/<job_id>` | Progress, then clips when done |
 | `GET /jobs` | Every job, including restored ones |
 | `POST /jobs/<job_id>/retry` · `/dismiss` | Re-run or hide a failed job |
 | `GET /saved-clips` | Every analyzed video and its clips |
 | `GET /shortlist?date=YYYY-MM-DD` | Today's picks across videos |
-| `POST /send-to-resolve` | Render `output/` mp4s and put clips on the Resolve timeline (each result has `in_resolve` and, if Resolve wasn't reached, `resolve_error`) |
+| `POST /send-to-resolve` | Render mp4s and put clips on the Resolve timeline (each result has `in_resolve` and, if Resolve wasn't reached, `resolve_error`) |
 | `POST /broll/<video_id>/<i>` · `/beat-plan/<video_id>/<i>` | B-roll suggestions and beat plan for one clip |
 | `POST /performance` · `/performance/import-csv` | Log stats for a posted clip, or import a Studio CSV |
 | `POST /copyright-status/<video_id>` | Mark a source cleared or unknown |
 
-### 🧪 Tests
+### 🧪 Development
 
 ```bash
-cd backend && ../venv/bin/python -m pytest
+git clone https://github.com/aadedolapo/Clippers.git && cd Clippers
+python3 -m venv venv && source venv/bin/activate
+pip install -e ".[dev]"
+ruff check src tests && pytest
 ```
 
-The tests cover scoring, snapping, shot detection, reframing, diarization helpers, captions, performance, the job store and the eval math.
+Tests run against a throwaway home folder, so they never touch your clips. See [CONTRIBUTING.md](CONTRIBUTING.md) for more.
 
 ---
 
@@ -360,8 +403,11 @@ The tests cover scoring, snapping, shot detection, reframing, diarization helper
 
 ```text
 Clippers/
-├── backend/
-│   ├── main.py                 FastAPI server, job queue, all endpoints
+├── src/clippers/
+│   ├── cli.py                  the `clippers` command
+│   ├── server.py               FastAPI app, job queue, all endpoints
+│   ├── paths.py                where data lives (~/Clippers or CLIPPERS_HOME)
+│   ├── channel.py              channel description and lanes
 │   ├── pipeline.py             download + faster-whisper transcription
 │   ├── llm_scoring.py          Claude window scoring, clip-length presets
 │   ├── scoring.py              WEIGHTS, combined score, shortlist + pick
@@ -376,26 +422,30 @@ Clippers/
 │   ├── music.py, sfx.py        music beds and SFX library
 │   ├── performance.py          posted-clip stats + report
 │   ├── jobs_store.py           durable jobs on disk
-│   ├── eval/run_eval.py        score-vs-retention eval
-│   └── tests/                  pytest suite
-├── frontend/
-│   └── index.html              the app
-└── output/                     ready-to-post mp4s
+│   ├── evaluate.py             score-vs-retention eval
+│   ├── static/index.html       the app (one file, no build step)
+│   └── assets/                 bundled fonts, .env template
+├── tests/                      pytest suite
+└── pyproject.toml
 ```
 
 ### Where things end up
 
 | What | Where |
 |---|---|
-| Uploaded source videos | `backend/downloads/` |
-| Camera cuts and speaker turns per video | `backend/downloads/<video>.shots.json`, `.diarization.json` |
-| Analysis jobs (transcript, candidates) | `backend/data/jobs/<job_id>.json` |
-| Saved clip metadata (hook, title, scorecard) | `backend/data/saved_clips.json` |
-| Posted-clip performance log | `backend/data/performance.json` |
-| Music history and SFX index | `backend/data/music_history.json`, `sfx_index.json` |
-| Ready-to-post clips | `output/` |
+| Settings | `~/Clippers/.env` |
+| Uploaded source videos | `~/Clippers/downloads/` |
+| Camera cuts and speaker turns per video | `~/Clippers/downloads/<video>.shots.json`, `.diarization.json` |
+| Analysis jobs (transcript, candidates) | `~/Clippers/data/jobs/<job_id>.json` |
+| Saved clip metadata (hook, title, scorecard) | `~/Clippers/data/saved_clips.json` |
+| Posted-clip performance log | `~/Clippers/data/performance.json` |
+| Music history and SFX index | `~/Clippers/data/music_history.json`, `sfx_index.json` |
+| Face-detection model | `~/Clippers/models/` |
+| Ready-to-post clips | `~/Clippers/output/` |
 | Resolve timelines | your open project, as `Viral Clips - <title>` |
-| Eval set and results | `backend/eval/clips.json`, `results.jsonl` |
+| Eval set and results | `~/Clippers/eval/clips.json`, `results.jsonl` |
+
+Set `CLIPPERS_HOME` to keep all of it somewhere else.
 
 ---
 
@@ -403,8 +453,22 @@ Clippers/
 
 - **For the Resolve timeline, Resolve must be open with a project loaded** before you click Send to Resolve. Without it you get the mp4 only.
 - **Cost scales with video length.** Scoring runs several Claude calls at once. The visual rerank adds one call per shortlisted clip.
-- The **Resolve timeline is always 9:16**. The aspect picker only changes the `output/` mp4.
+- The **Resolve timeline is always 9:16**. The aspect picker only changes the mp4.
 - **B-roll and beat plans are on demand**, one Claude call per click. They never run automatically.
+
+---
+
+## ⚖️ Responsible use
+
+Clippers cuts clips from other people's videos. You're responsible for having the rights to what you clip and post: your own footage, footage you have permission to use, or use that's allowed where you post it. The **Copyright** badge on each video stays *unknown* until you mark it cleared, as a reminder to check.
+
+## 🤝 Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and checks, and [CHANGELOG.md](CHANGELOG.md) for what's changed.
+
+## 📄 License
+
+[MIT](LICENSE). The bundled Montserrat and Playfair Display fonts are under the [SIL Open Font License](src/clippers/assets/fonts/).
 
 <div align="center">
 <br/>
