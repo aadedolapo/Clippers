@@ -42,5 +42,7 @@ jobs:
         run: choco install ffmpeg -y --no-progress
       - run: pip install -e ".[dev]"
       - run: ffmpeg -version
+      - if: runner.os == 'macOS'
+        run: python .ci-diag/diag.py
       - run: pytest -rs
       - run: clippers --version
