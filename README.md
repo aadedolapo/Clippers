@@ -63,9 +63,11 @@ Getting pipx and ffmpeg first:
 
 | | pipx | ffmpeg |
 |---|---|---|
-| 🍎 **macOS** | `brew install pipx && pipx ensurepath` | `brew install ffmpeg` |
+| 🍎 **macOS** | `brew install pipx && pipx ensurepath` | `brew install homebrew-ffmpeg/ffmpeg/ffmpeg` |
 | 🐧 **Linux** (Debian/Ubuntu) | `sudo apt install pipx && pipx ensurepath` | `sudo apt install ffmpeg` |
 | 🪟 **Windows** | `py -m pip install --user pipx` then `py -m pipx ensurepath` | `winget install Gyan.FFmpeg` |
+
+On macOS, use the `homebrew-ffmpeg` build above rather than plain `brew install ffmpeg`: Homebrew's default ffmpeg leaves out libass, which burned-in captions, the spoken outro and the comment question need. `clippers doctor` tells you if your ffmpeg is missing it.
 
 Open a new terminal afterwards so `pipx`, `ffmpeg` and later `clippers` are on your path. The commands in this README are the same on every system; on Windows, `~/Clippers` means `C:\Users\<you>\Clippers`.
 

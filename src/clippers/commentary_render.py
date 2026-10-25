@@ -84,6 +84,8 @@ def render_commentary_segment(
     bg_path = os.path.join(output_dir, f"{tag}_bg.mp4")
     _render_background(frame_path, duration, bg_path)
 
+    if not captions.has_ass_filter():
+        raise RuntimeError(captions.NO_ASS_FILTER)
     ass_content = captions.generate_commentary_ass(tts_result["words"])
     ass_path = os.path.join(output_dir, f"{tag}.ass")
     with open(ass_path, "w", encoding="utf-8") as f:

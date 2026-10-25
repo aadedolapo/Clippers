@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from clippers import reframe
+from clippers import captions, reframe
 
 
 def test_crop_size_portrait_from_landscape():
@@ -92,7 +92,7 @@ def test_filter_path_windows():
     assert reframe.filter_path(r"C:\Users\me\a.ass") == r"C\\:/Users/me/a.ass"
 
 
-@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or not captions.has_ass_filter(), reason="needs ffmpeg with libass")
 def test_filter_path_survives_ffmpeg(tmp_path):
     # A folder name with every character that's special in a filter graph.
     d = tmp_path / "it's, [odd]; name"

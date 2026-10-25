@@ -3,12 +3,30 @@ ASS caption generation + ffmpeg burn-in: word-by-word karaoke
 highlight captions, emphasis words visually distinct, swappable style presets.
 """
 
+import functools
 import os
 import re
 import subprocess
 from typing import Optional
 
 from clippers import paths, reframe
+
+NO_ASS_FILTER = (
+    "This ffmpeg can't draw text on video (it was built without libass), which burned-in captions, "
+    "the spoken outro and the comment question need. On macOS, switch to the full build: "
+    "brew uninstall ffmpeg && brew install homebrew-ffmpeg/ffmpeg/ffmpeg"
+)
+
+
+@functools.lru_cache(maxsize=None)
+def has_ass_filter() -> bool:
+    """Whether ffmpeg has the libass `ass` filter. Homebrew's default ffmpeg
+    stopped including it, and without it every text overlay fails."""
+    try:
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+    return any(line.split()[1:2] == ["ass"] for line in out.splitlines())
 
 OUTPUT_DIR = paths.OUTPUT_DIR
 
@@ -657,6 +675,10 @@ def render_minimal_faith_clip(
         escaped_bait_ass_path = reframe.filter_path(bait_ass_path)
         vf.append(f"ass={escaped_bait_ass_path}")
 
+    if any(f.startswith("ass=") for f in vf) and not has_ass_filter():
+        _remove(cleanup)
+        raise RuntimeError(NO_ASS_FILTER)
+
     inputs = ["-ss", str(start), "-t", str(duration), "-i", filepath]
     filter_complex = [f"[0:v]{','.join(vf)}[v]"]
     voice_chain = (
@@ -851,6 +873,9 @@ def burn_captions(
             f.write(bait_ass_content)
         ass_stages.append(f"ass={reframe.filter_path(bait_ass_path)}")
 
+    if ass_stages and not has_ass_filter():
+        _remove(cleanup)
+        raise RuntimeError(NO_ASS_FILTER)
     vf = f"{crop},{scale}," + ",".join(ass_stages) if ass_stages else f"{crop},{scale}"
 
     cmd = [

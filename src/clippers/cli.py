@@ -51,14 +51,19 @@ def cmd_doctor(args) -> int:
     print(f"Clippers {__version__}, Python {sys.version.split()[0]}, home {paths.HOME}\n")
     print("Required")
     ok = _check(bool(shutil.which("ffmpeg")) and bool(shutil.which("ffprobe")), "ffmpeg and ffprobe on PATH",
-                "Install ffmpeg (macOS: brew install ffmpeg; Windows: winget install ffmpeg).")
+                "Install ffmpeg (macOS: brew install homebrew-ffmpeg/ffmpeg/ffmpeg; "
+                "Linux: sudo apt install ffmpeg; Windows: winget install Gyan.FFmpeg).")
     ok &= _check(bool(os.environ.get("ANTHROPIC_API_KEY")), "ANTHROPIC_API_KEY set",
                  f"Run `clippers init`, then add the key to {paths.ENV_FILE}.")
     home_ok = os.path.isdir(paths.HOME) and os.access(paths.HOME, os.W_OK)
     ok &= _check(home_ok, f"home folder writable ({paths.HOME})", "Run `clippers init`.")
 
     print("\nOptional")
-    from clippers import diarize, resolve_integration
+    from clippers import captions, diarize, resolve_integration
+
+    if shutil.which("ffmpeg"):
+        _check(captions.has_ass_filter(), "ffmpeg can draw text (captions, spoken outro, comment question)",
+               captions.NO_ASS_FILTER)
 
     try:
         resolve_integration._get_project()
