@@ -41,5 +41,6 @@ jobs:
       - if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
       - run: pip install -e ".[dev]"
-      - run: pytest
+      - run: ffmpeg -version
+      - run: pytest -rs
       - run: clippers --version
