@@ -5,20 +5,26 @@
 <title>Viral Clip Finder</title>
 <style>
   :root {
-    color-scheme: light dark;
-    --bg: #0f1115;
-    --panel: #171a21;
-    --border: #2a2e38;
-    --text: #e8e9ec;
-    --muted: #9aa0ab;
-    --accent: #6ea8fe;
-    --good: #4caf7d;
-    --bad: #e0616b;
-    --warn: #e0b04c;
+    color-scheme: light;
+    --bg: #ffffff;        /* page */
+    --surface: #ffffff;   /* cards, inputs, buttons */
+    --panel: #f6f7f9;     /* clip cards inside a session */
+    --border: #e2e5ea;
+    --border-strong: #cdd2da;
+    --text: #14161b;
+    --muted: #5b6270;
+    --accent: #2457d6;
+    --accent-hover: #1d48b5;
+    --on-accent: #ffffff;
+    --good: #1a7f4b;
+    --bad: #c42f3d;
+    --warn: #9a6200;
+    --shadow: 0 1px 2px rgba(20, 22, 27, 0.04), 0 1px 3px rgba(20, 22, 27, 0.06);
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
+    line-height: 1.45;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     background: var(--bg);
     color: var(--text);
@@ -26,16 +32,22 @@
   header {
     padding: 24px 32px;
     border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    /* Line the header text up with main's 900px column. */
+    padding-inline: max(32px, calc((100% - 900px) / 2 + 32px));
   }
   h1 { font-size: 20px; margin: 0 0 4px; }
   header p { margin: 0; color: var(--muted); font-size: 14px; }
   main { max-width: 900px; margin: 0 auto; padding: 24px 32px 80px; }
 
-  .row { display: flex; gap: 8px; align-items: center; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row input[type=file] { flex: 1 1 240px; min-width: 0; }
+  .row input[type=text] { flex: 1 1 160px; min-width: 0; }
+  .row .clip-style-checkbox { white-space: nowrap; font-size: 13px; }
   input[type=text] {
     flex: 1;
     padding: 12px 14px;
-    background: var(--panel);
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
     color: var(--text);
@@ -44,7 +56,7 @@
   input[type=file] {
     flex: 1;
     padding: 10px 14px;
-    background: var(--panel);
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
     color: var(--muted);
@@ -56,7 +68,7 @@
     border-radius: 6px;
     border: none;
     background: var(--accent);
-    color: #06121f;
+    color: var(--on-accent);
     font-weight: 600;
     font-size: 13px;
     cursor: pointer;
@@ -66,16 +78,32 @@
     border-radius: 8px;
     border: none;
     background: var(--accent);
-    color: #06121f;
+    color: var(--on-accent);
     font-weight: 600;
     font-size: 14px;
     cursor: pointer;
   }
+  button:hover:not(:disabled) { background: var(--accent-hover); }
   button:disabled { opacity: 0.5; cursor: default; }
-  button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+  button.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); }
+  button.secondary:hover:not(:disabled),
+  button.clip-field-copy:hover, button.clip-download-btn:hover, button.clip-broll-btn:hover,
+  button.clip-beatplan-btn:hover, button.clip-mark-posted-btn:hover, button.clip-performance-save:hover,
+  .csv-import-label:hover {
+    background: var(--panel);
+    border-color: var(--border-strong);
+  }
+  input:focus-visible, select:focus-visible, button:focus-visible, .csv-import-label:focus-within {
+    outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    outline-offset: 1px;
+  }
+  input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
+  input::placeholder { color: var(--muted); }
 
   #sessions { margin-top: 24px; display: flex; flex-direction: column; gap: 24px; }
   .session {
+    background: var(--surface);
+    box-shadow: var(--shadow);
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 18px 20px;
@@ -115,12 +143,12 @@
     white-space: nowrap;
   }
   .compliance-badge.unknown {
-    background: rgba(224, 97, 107, 0.12);
+    background: color-mix(in srgb, var(--bad) 12%, transparent);
     border-color: var(--bad);
     color: var(--bad);
   }
   .compliance-badge.cleared {
-    background: rgba(76, 175, 125, 0.12);
+    background: color-mix(in srgb, var(--good) 12%, transparent);
     border-color: var(--good);
     color: var(--good);
   }
@@ -133,7 +161,7 @@
     margin-top: 12px;
     padding: 12px 14px;
     border-radius: 8px;
-    background: rgba(224, 97, 107, 0.12);
+    background: color-mix(in srgb, var(--bad) 12%, transparent);
     border: 1px solid var(--bad);
     color: var(--bad);
     font-size: 13px;
@@ -171,8 +199,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    background: rgba(110, 168, 254, 0.08);
-    border: 1px solid rgba(110, 168, 254, 0.3);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
     border-radius: 6px;
     padding: 6px 10px;
     margin-bottom: 6px;
@@ -185,7 +213,7 @@
     font-weight: 600;
     border-radius: 6px;
     border: 1px solid var(--border);
-    background: var(--panel);
+    background: var(--surface);
     color: var(--text);
     cursor: pointer;
     flex-shrink: 0;
@@ -196,8 +224,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    background: rgba(76, 175, 125, 0.08);
-    border: 1px solid rgba(76, 175, 125, 0.3);
+    background: color-mix(in srgb, var(--good) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--good) 30%, transparent);
     border-radius: 6px;
     padding: 6px 10px;
     margin-bottom: 8px;
@@ -230,7 +258,7 @@
     flex-wrap: wrap;
     margin-bottom: 10px;
     padding: 8px 10px;
-    background: rgba(110, 168, 254, 0.05);
+    background: color-mix(in srgb, var(--accent) 5%, transparent);
     border: 1px solid var(--border);
     border-radius: 8px;
     font-size: 12px;
@@ -239,19 +267,19 @@
   .clip-style-checkbox { display: flex; align-items: center; gap: 5px; color: var(--text); cursor: pointer; }
   .clip-style-controls select {
     padding: 4px 6px;
-    background: var(--panel);
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--text);
     font-size: 12px;
   }
-  .clip-download-btn, .clip-broll-btn, .clip-mark-posted-btn {
+  .clip-download-btn, .clip-broll-btn, .clip-beatplan-btn, .clip-mark-posted-btn {
     padding: 5px 12px;
     font-size: 12px;
     font-weight: 600;
     border-radius: 6px;
     border: 1px solid var(--border);
-    background: var(--panel);
+    background: var(--surface);
     color: var(--text);
     cursor: pointer;
     margin-bottom: 8px;
@@ -264,7 +292,7 @@
     align-items: baseline;
     gap: 8px;
     font-size: 12px;
-    background: rgba(110, 168, 254, 0.06);
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 5px 10px;
@@ -276,7 +304,7 @@
     display: flex;
     gap: 10px;
     align-items: center;
-    background: rgba(110, 168, 254, 0.06);
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 8px 10px;
@@ -321,13 +349,13 @@
     border-radius: 12px;
     padding: 18px 20px;
     margin-bottom: 24px;
-    background: rgba(110, 168, 254, 0.04);
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
   }
   .shortlist-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
   .shortlist-header h2 { font-size: 16px; margin: 0; flex: 1; }
   .shortlist-header input[type=date] {
     padding: 8px 10px;
-    background: var(--panel);
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--text);
@@ -347,7 +375,7 @@
     letter-spacing: 0.04em;
     font-weight: 700;
     color: var(--accent);
-    background: rgba(110, 168, 254, 0.12);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
     padding: 2px 8px;
     border-radius: 999px;
   }
@@ -365,7 +393,7 @@
     padding: 8px 14px;
     border-radius: 8px;
     border: 1px solid var(--border);
-    background: var(--panel);
+    background: var(--surface);
     color: var(--text);
     font-size: 13px;
     font-weight: 600;
@@ -382,7 +410,7 @@
     width: 90px;
     padding: 5px 8px;
     font-size: 12px;
-    background: var(--panel);
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--text);
@@ -393,7 +421,7 @@
     font-weight: 600;
     border-radius: 6px;
     border: 1px solid var(--border);
-    background: var(--panel);
+    background: var(--surface);
     color: var(--text);
     cursor: pointer;
   }
@@ -421,8 +449,8 @@
 
   <div class="row">
     <input type="file" id="local-file-input" accept="video/*" multiple />
-    <input type="text" id="local-title-input" placeholder="Title (optional, single file only)" style="flex: 0 0 220px;" />
-    <input type="text" id="local-source-input" placeholder="Source / speaker (optional, single file only)" style="flex: 0 0 220px;" />
+    <input type="text" id="local-title-input" placeholder="Title (optional, single file only)" />
+    <input type="text" id="local-source-input" placeholder="Source / speaker (optional, single file only)" />
     <label class="clip-style-checkbox" title="Look for 45-90s story clips instead of Shorts-length ones"><input type="checkbox" id="long-form-input" /> Long-form clips</label>
     <button id="analyze-btn">Analyze</button>
   </div>
