@@ -368,8 +368,17 @@ def write_sendcmd(path: dict, duration: float, out_path: str, target: str = "cro
     return out_path
 
 
-def _escape_filter_path(p: str) -> str:
-    return p.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'").replace(",", "\\,")
+def filter_path(path: str) -> str:
+    """A file path written into an ffmpeg filter argument (sendcmd=f=...,
+    ass=..., fontsdir=...). ffmpeg unescapes it twice, once as the filter's
+    option value and once as part of the filter graph, so it's escaped for
+    both. Backslashes become forward slashes first: ffmpeg accepts those on
+    Windows too, and it leaves a drive letter's colon as the only special
+    character in a typical Windows path."""
+    value = path.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+    for ch in "\\',;[]":
+        value = value.replace(ch, "\\" + ch)
+    return value
 
 
 def center_crop_filter(aspect: tuple[int, int] = (9, 16)) -> str:
@@ -403,7 +412,7 @@ def crop_filter(
     cmd_path = os.path.join(work_dir, f"{tag}_reframe.cmd")
     write_sendcmd(path, end - start, cmd_path)
     x0, y0 = path["xy"][0]
-    chain = (f"sendcmd=f={_escape_filter_path(cmd_path)},"
+    chain = (f"sendcmd=f={filter_path(cmd_path)},"
              f"crop@rf=w={path['crop_w']}:h={path['crop_h']}:x={x0:.1f}:y={y0:.1f}")
     return chain, [cmd_path]
 

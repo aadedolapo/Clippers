@@ -1,3 +1,8 @@
+import shutil
+import subprocess
+
+import pytest
+
 from clippers import reframe
 
 
@@ -80,3 +85,24 @@ def test_write_sendcmd_one_line_per_frame(tmp_path):
 
 def test_center_crop_filter_mentions_aspect():
     assert "ih*9/16" in reframe.center_crop_filter((9, 16))
+
+
+def test_filter_path_windows():
+    # Backslashes become forward slashes; the drive colon is escaped for both levels.
+    assert reframe.filter_path(r"C:\Users\me\a.ass") == r"C\\:/Users/me/a.ass"
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_filter_path_survives_ffmpeg(tmp_path):
+    # A folder name with every character that's special in a filter graph.
+    d = tmp_path / "it's, [odd]; name"
+    d.mkdir()
+    ass = d / "t.ass"
+    ass.write_text("[Script Info]\nPlayResX: 64\nPlayResY: 64\n"
+                   "[V4+ Styles]\nFormat: Name, Fontname, Fontsize\nStyle: Default,Arial,20\n[Events]\n"
+                   "Format: Layer, Start, End, Style, Text\n"
+                   "Dialogue: 0,0:00:00.00,0:00:01.00,Default,HI\n", encoding="utf-8")
+    vf = f"ass={reframe.filter_path(str(ass))}:fontsdir={reframe.filter_path(str(d))}"
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=black:s=64x64:d=0.2",
+                        "-vf", vf, str(tmp_path / "o.mp4")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr

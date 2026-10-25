@@ -641,8 +641,8 @@ def render_minimal_faith_clip(
         ass_content = generate_minimal_faith_ass(segments, start, end, emphasis_words, out_h=out_h)
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(ass_content)
-        escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-        escaped_fonts_dir = FONTS_DIR.replace(":", "\\:")
+        escaped_ass_path = reframe.filter_path(ass_path)
+        escaped_fonts_dir = reframe.filter_path(FONTS_DIR)
         vf.append(f"ass={escaped_ass_path}:fontsdir={escaped_fonts_dir}")
 
     # Independent of add_captions — see burn_captions' matching comment.
@@ -654,7 +654,7 @@ def render_minimal_faith_clip(
         )
         with open(bait_ass_path, "w", encoding="utf-8") as f:
             f.write(bait_ass_content)
-        escaped_bait_ass_path = bait_ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        escaped_bait_ass_path = reframe.filter_path(bait_ass_path)
         vf.append(f"ass={escaped_bait_ass_path}")
 
     inputs = ["-ss", str(start), "-t", str(duration), "-i", filepath]
@@ -818,9 +818,6 @@ def burn_captions(
     crop, cleanup = _crop_chain(filepath, start, end, output_dir, tag, aspect, follow_speaker, speaker_turns)
     scale = f"scale={out_w}:{out_h}"
 
-    def _escape_ass_path(p: str) -> str:
-        return p.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-
     # comment_bait_question is independent of add_captions — it's a separate
     # editorial layer (see main.py's ClipSelection.comment_bait), not part of
     # the karaoke/pinned-line caption bundle, so it still renders even when
@@ -831,7 +828,7 @@ def burn_captions(
         ass_content = generate_ass(segments, start, end, emphasis_words, preset_name, out_h=out_h)
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(ass_content)
-        ass_stages.append(f"ass={_escape_ass_path(ass_path)}")
+        ass_stages.append(f"ass={reframe.filter_path(ass_path)}")
 
         if pinned_line:
             pinned_ass_path = os.path.join(output_dir, f"{tag}_pinned.ass")
@@ -842,7 +839,7 @@ def burn_captions(
             # first stage already rendered — the two files use disjoint screen
             # regions (top-pinned vs. bottom karaoke) so there's no visual
             # conflict, and this avoids merging two style blocks into one file.
-            ass_stages.append(f"ass={_escape_ass_path(pinned_ass_path)}")
+            ass_stages.append(f"ass={reframe.filter_path(pinned_ass_path)}")
 
     if comment_bait_question:
         bait_ass_path = os.path.join(output_dir, f"{tag}_bait.ass")
@@ -852,7 +849,7 @@ def burn_captions(
         )
         with open(bait_ass_path, "w", encoding="utf-8") as f:
             f.write(bait_ass_content)
-        ass_stages.append(f"ass={_escape_ass_path(bait_ass_path)}")
+        ass_stages.append(f"ass={reframe.filter_path(bait_ass_path)}")
 
     vf = f"{crop},{scale}," + ",".join(ass_stages) if ass_stages else f"{crop},{scale}"
 

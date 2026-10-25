@@ -88,7 +88,7 @@ def render_commentary_segment(
     ass_path = os.path.join(output_dir, f"{tag}.ass")
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(ass_content)
-    escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    escaped_ass_path = reframe.filter_path(ass_path)
 
     out_path = os.path.join(output_dir, f"{tag}_segment.mp4")
     _run_ffmpeg(

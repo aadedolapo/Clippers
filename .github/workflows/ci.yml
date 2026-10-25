@@ -17,18 +17,29 @@ jobs:
       - run: ruff check src tests
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.13"]
+        # Oldest and newest supported Python on Linux; newest on macOS and
+        # Windows, which is what a pipx install there would pick.
+        include:
+          - { os: ubuntu-latest, python-version: "3.9" }
+          - { os: ubuntu-latest, python-version: "3.13" }
+          - { os: macos-latest, python-version: "3.13" }
+          - { os: windows-latest, python-version: "3.13" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg libsndfile1
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libsndfile1
+      - if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
       - run: pip install -e ".[dev]"
       - run: pytest
       - run: clippers --version
