@@ -84,11 +84,13 @@ def render_commentary_segment(
     bg_path = os.path.join(output_dir, f"{tag}_bg.mp4")
     _render_background(frame_path, duration, bg_path)
 
+    if not captions.has_ass_filter():
+        raise RuntimeError(captions.NO_ASS_FILTER)
     ass_content = captions.generate_commentary_ass(tts_result["words"])
     ass_path = os.path.join(output_dir, f"{tag}.ass")
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(ass_content)
-    escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    escaped_ass_path = reframe.filter_path(ass_path)
 
     out_path = os.path.join(output_dir, f"{tag}_segment.mp4")
     _run_ffmpeg(

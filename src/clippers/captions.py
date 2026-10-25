@@ -3,12 +3,30 @@ ASS caption generation + ffmpeg burn-in: word-by-word karaoke
 highlight captions, emphasis words visually distinct, swappable style presets.
 """
 
+import functools
 import os
 import re
 import subprocess
 from typing import Optional
 
 from clippers import paths, reframe
+
+NO_ASS_FILTER = (
+    "This ffmpeg can't draw text on video (it was built without libass), which burned-in captions, "
+    "the spoken outro and the comment question need. On macOS, switch to the full build: "
+    "brew uninstall ffmpeg && brew install homebrew-ffmpeg/ffmpeg/ffmpeg"
+)
+
+
+@functools.lru_cache(maxsize=None)
+def has_ass_filter() -> bool:
+    """Whether ffmpeg has the libass `ass` filter. Homebrew's default ffmpeg
+    stopped including it, and without it every text overlay fails."""
+    try:
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+    return any(line.split()[1:2] == ["ass"] for line in out.splitlines())
 
 OUTPUT_DIR = paths.OUTPUT_DIR
 
@@ -641,8 +659,8 @@ def render_minimal_faith_clip(
         ass_content = generate_minimal_faith_ass(segments, start, end, emphasis_words, out_h=out_h)
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(ass_content)
-        escaped_ass_path = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-        escaped_fonts_dir = FONTS_DIR.replace(":", "\\:")
+        escaped_ass_path = reframe.filter_path(ass_path)
+        escaped_fonts_dir = reframe.filter_path(FONTS_DIR)
         vf.append(f"ass={escaped_ass_path}:fontsdir={escaped_fonts_dir}")
 
     # Independent of add_captions — see burn_captions' matching comment.
@@ -654,8 +672,12 @@ def render_minimal_faith_clip(
         )
         with open(bait_ass_path, "w", encoding="utf-8") as f:
             f.write(bait_ass_content)
-        escaped_bait_ass_path = bait_ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        escaped_bait_ass_path = reframe.filter_path(bait_ass_path)
         vf.append(f"ass={escaped_bait_ass_path}")
+
+    if any(f.startswith("ass=") for f in vf) and not has_ass_filter():
+        _remove(cleanup)
+        raise RuntimeError(NO_ASS_FILTER)
 
     inputs = ["-ss", str(start), "-t", str(duration), "-i", filepath]
     filter_complex = [f"[0:v]{','.join(vf)}[v]"]
@@ -818,9 +840,6 @@ def burn_captions(
     crop, cleanup = _crop_chain(filepath, start, end, output_dir, tag, aspect, follow_speaker, speaker_turns)
     scale = f"scale={out_w}:{out_h}"
 
-    def _escape_ass_path(p: str) -> str:
-        return p.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-
     # comment_bait_question is independent of add_captions — it's a separate
     # editorial layer (see main.py's ClipSelection.comment_bait), not part of
     # the karaoke/pinned-line caption bundle, so it still renders even when
@@ -831,7 +850,7 @@ def burn_captions(
         ass_content = generate_ass(segments, start, end, emphasis_words, preset_name, out_h=out_h)
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(ass_content)
-        ass_stages.append(f"ass={_escape_ass_path(ass_path)}")
+        ass_stages.append(f"ass={reframe.filter_path(ass_path)}")
 
         if pinned_line:
             pinned_ass_path = os.path.join(output_dir, f"{tag}_pinned.ass")
@@ -842,7 +861,7 @@ def burn_captions(
             # first stage already rendered — the two files use disjoint screen
             # regions (top-pinned vs. bottom karaoke) so there's no visual
             # conflict, and this avoids merging two style blocks into one file.
-            ass_stages.append(f"ass={_escape_ass_path(pinned_ass_path)}")
+            ass_stages.append(f"ass={reframe.filter_path(pinned_ass_path)}")
 
     if comment_bait_question:
         bait_ass_path = os.path.join(output_dir, f"{tag}_bait.ass")
@@ -852,8 +871,11 @@ def burn_captions(
         )
         with open(bait_ass_path, "w", encoding="utf-8") as f:
             f.write(bait_ass_content)
-        ass_stages.append(f"ass={_escape_ass_path(bait_ass_path)}")
+        ass_stages.append(f"ass={reframe.filter_path(bait_ass_path)}")
 
+    if ass_stages and not has_ass_filter():
+        _remove(cleanup)
+        raise RuntimeError(NO_ASS_FILTER)
     vf = f"{crop},{scale}," + ",".join(ass_stages) if ass_stages else f"{crop},{scale}"
 
     cmd = [

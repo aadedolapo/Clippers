@@ -28,7 +28,7 @@ ruff check src tests     # lint (ruff check --fix sorts imports for you)
 pytest                   # tests; they run against a throwaway home folder
 ```
 
-CI runs both on Python 3.9 and 3.13.
+CI runs both on Linux (Python 3.9 and 3.13), macOS and Windows (Python 3.13).
 
 - **Keep it working on Python 3.9.** Use `Optional[str]` rather than `str | None`.
 - **Add a test** for logic you change. Anything that doesn't need ffmpeg, Resolve or an API key should be testable; see `tests/test_send_fallback.py` for faking those out.

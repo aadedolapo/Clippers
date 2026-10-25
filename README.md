@@ -7,6 +7,7 @@
 Clippers finds the moments in a talk, sermon, podcast or interview that work on their own as a short clip. It ranks them on hook, payoff, loudness and visuals, re-cuts them so they open clean, and frames the speaker in 9:16. Your picks land in DaVinci Resolve as a timeline that's ready to edit.
 
 ![Python](https://img.shields.io/badge/python-3.9%E2%80%933.13-3776AB?logo=python&logoColor=white)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-555)
 ![FastAPI](https://img.shields.io/badge/FastAPI-backend-009688?logo=fastapi&logoColor=white)
 ![Claude](https://img.shields.io/badge/Claude-Opus%205.5%20%C2%B7%20Sonnet%205-D97757?logo=anthropic&logoColor=white)
 ![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-scripting%20API-233A51)
@@ -56,7 +57,22 @@ Clippers finds the moments in a talk, sermon, podcast or interview that work on 
 pipx install --python 3.13 --fetch-missing-python git+https://github.com/aadedolapo/Clippers.git
 ```
 
-[pipx](https://pipx.pypa.io/) (`brew install pipx` on macOS) installs Clippers in its own environment and puts the `clippers` command on your path. Clippers runs on **Python 3.9–3.13**: the transcription engine doesn't support newer versions yet. `--python 3.13 --fetch-missing-python` makes pipx use 3.13, downloading it if you don't have it, even when your default Python is newer.
+[pipx](https://pipx.pypa.io/) installs Clippers in its own environment and puts the `clippers` command on your path. Clippers runs on **Python 3.9–3.13**: the transcription engine doesn't support newer versions yet. `--python 3.13 --fetch-missing-python` makes pipx use 3.13, downloading it if you don't have it, even when your default Python is newer.
+
+Getting pipx and ffmpeg first:
+
+| | pipx | ffmpeg |
+|---|---|---|
+| 🍎 **macOS** | `brew install pipx && pipx ensurepath` | `brew install homebrew-ffmpeg/ffmpeg/ffmpeg` |
+| 🐧 **Linux** (Debian/Ubuntu) | `sudo apt install pipx && pipx ensurepath` | `sudo apt install ffmpeg` |
+| 🪟 **Windows** | `py -m pip install --user pipx` then `py -m pipx ensurepath` | `winget install Gyan.FFmpeg` |
+
+On macOS, use the `homebrew-ffmpeg` build above rather than plain `brew install ffmpeg`: Homebrew's default ffmpeg leaves out libass, which burned-in captions, the spoken outro and the comment question need. `clippers doctor` tells you if your ffmpeg is missing it.
+
+Open a new terminal afterwards so `pipx`, `ffmpeg` and later `clippers` are on your path. The commands in this README are the same on every system; on Windows, `~/Clippers` means `C:\Users\<you>\Clippers`.
+
+> [!NOTE]
+> Tests run on macOS, Linux and Windows for every change, but day-to-day use so far has been on macOS. If something breaks on Linux or Windows, please [open an issue](https://github.com/aadedolapo/Clippers/issues) with the output of `clippers doctor`.
 
 For speaker diarization, add the extra (it pulls in PyTorch, several GB):
 

@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from clippers import resolve_integration, server
@@ -33,7 +35,7 @@ def test_renders_mp4_when_resolve_unreachable(job, monkeypatch):
     monkeypatch.setattr(resolve_integration, "_get_project", unreachable)
     results = _send([(10.0, 30.0), (40.0, 60.0)])
     assert [r["success"] for r in results] == [True, True]
-    assert [r["captioned_mp4"] for r in results] == ["/out/10.mp4", "/out/40.mp4"]
+    assert [r["captioned_mp4"] for r in results] == [os.path.normpath("/out/10.mp4"), os.path.normpath("/out/40.mp4")]
     assert all(r["in_resolve"] is False and "Could not connect" in r["resolve_error"] for r in results)
     # The rest of the request skips Resolve instead of reconnecting per clip.
     assert len(attempts) == 1
@@ -45,7 +47,7 @@ def test_one_clip_failing_in_resolve_still_renders(job, monkeypatch):
 
     monkeypatch.setattr(resolve_integration, "send_clip_to_resolve", boom)
     (r,) = _send([(10.0, 30.0)])
-    assert r["success"] and r["captioned_mp4"] == "/out/10.mp4"
+    assert r["success"] and r["captioned_mp4"] == os.path.normpath("/out/10.mp4")
     assert r["in_resolve"] is False and r["resolve_error"] == "AppendToTimeline failed"
 
 
