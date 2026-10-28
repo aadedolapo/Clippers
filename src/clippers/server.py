@@ -380,6 +380,18 @@ def status(job_id: str):
     return response
 
 
+@app.get("/video/{video_id}")
+def video(video_id: str):
+    """Stream an analyzed video's source file so each clip card can play its
+    own range in the browser. FileResponse handles Range requests, which the
+    player needs to seek straight to a clip's start."""
+    job = _find_job_by_video_id(video_id)
+    filepath = job.get("filepath") if job else None
+    if not filepath or not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="video file not found")
+    return FileResponse(filepath)
+
+
 @app.get("/saved-clips")
 def saved_clips():
     """All previously analyzed sessions' hook/title/description data, so the

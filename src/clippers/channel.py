@@ -6,7 +6,7 @@ tuned to one channel without editing the prompts:
     CHANNEL_LANES=faith, men's growth, discipline, purpose
 
 Lanes are the channel's core topics. The scorer rates how well each clip
-fits them (lane_fit) and tags it with one; Today's picks takes at most one
+fits them (lane_fit) and tags it with one; the shortlist takes at most one
 clip per lane. With no lanes set, clips are rated on broad appeal and
 tagged with a free-form topic instead.
 """

@@ -38,6 +38,8 @@ dependencies = [
     "requests>=2.31",
     "scenedetect>=0.6.4",
     "soundfile>=0.12",
+    # FileResponse gained Range support in 0.39; the clip players need it to seek.
+    "starlette>=0.39",
     "uvicorn[standard]>=0.29",
     "yt-dlp>=2024.1.1",
 ]

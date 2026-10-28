@@ -210,6 +210,7 @@ It's slow on CPU: several minutes per hour of audio. Results are cached as `<vid
 2. **Choose a length.** Leave it on Shorts (15–45s), or tick **Long-form clips** for 45–90s story clips.
 3. **Analyze.** It transcribes, finds camera cuts, scores and reranks. This takes a few minutes, depending on video length. If it fails, click **Retry** on its card (see [Jobs survive restarts](#-jobs-survive-restarts)).
 4. **Review the cards.** Each card shows:
+   - a portrait preview player that plays just that clip;
    - the time range and length;
    - the score, with a one-line reason;
    - the visual verdict;
@@ -246,14 +247,14 @@ Every analyzed video stays on the page after a refresh or restart, with its clip
 The retention data points at one bottleneck: **viewers swipe away in the first second.** The fix is to **make lots of candidates and post very few.**
 
 ```text
- 3–4 videos ──▶ analyze all ──▶ Today's picks ──▶ gut-check top 2 ──▶ post 1–2/day ──▶ log stats at 48h
+ 3–4 videos ──▶ analyze all ──▶ watch the top clips ──▶ gut-check top 2 ──▶ post 1–2/day ──▶ log stats at 48h
 ```
 
 1. **Pick 3–4 source videos** that fit your channel's lanes. Prefer speakers who haven't been clipped much.
-2. **Analyze all of them.** Then open **Today's picks**. It ranks every clip from the day across all videos, drops anything that fails the hook check, and takes at most one per lane.
-3. **Gut-check the top 2.** Does the first second make *you* stop?
+2. **Analyze all of them.** Each video's cards are ranked by score, and anything that fails the hook check is already dropped.
+3. **Gut-check the top 2.** Play them on their cards. Does the first second make *you* stop?
 4. **Send to Resolve, finish, post 1–2 a day**, a few hours apart.
-5. **After 48h**, click **Mark as posted** and log stayed-to-watch % and views. You can also import a YouTube Studio CSV each week (Content → Shorts → Export).
+5. **After 48h**, click **Mark as posted** and log stayed-to-watch % and views. You can also send a YouTube Studio CSV (Content → Shorts → Export) to `POST /performance/import-csv` each week.
 6. **Every 2 weeks**, run `clippers report` and tune `WEIGHTS` in `scoring.py`. Once you have 10+ posted clips with stats, the scorer uses your best and worst hooks as examples automatically.
 
 ---
@@ -293,7 +294,7 @@ CHANNEL_DESCRIPTION=a faith and self-improvement channel for young men
 CHANNEL_LANES=faith, men's growth, discipline, purpose
 ```
 
-**Lanes** are your channel's core topics. Claude rates how well each clip fits them (the *lane fit* score) and tags it with one, and Today's picks takes at most one clip per lane so your top picks aren't all the same topic. Leave both empty for a general-purpose channel: clips are then rated on broad appeal and tagged with a free-form topic.
+**Lanes** are your channel's core topics. Claude rates how well each clip fits them (the *lane fit* score) and tags it with one, and the `/shortlist` endpoint takes at most one clip per lane so its top picks aren't all the same topic. Leave both empty for a general-purpose channel: clips are then rated on broad appeal and tagged with a free-form topic.
 
 <details open>
 <summary><b>Core</b></summary>
@@ -390,7 +391,8 @@ The page talks to these endpoints, so you can script against them too.
 | `GET /jobs` | Every job, including restored ones |
 | `POST /jobs/<job_id>/retry` · `/dismiss` | Re-run or hide a failed job |
 | `GET /saved-clips` | Every analyzed video and its clips |
-| `GET /shortlist?date=YYYY-MM-DD` | Today's picks across videos |
+| `GET /video/<video_id>` | Stream a video's source file (the clip preview players use it) |
+| `GET /shortlist?date=YYYY-MM-DD` | The day's best clips across videos, at most one per lane |
 | `POST /send-to-resolve` | Render mp4s and put clips on the Resolve timeline (each result has `in_resolve` and, if Resolve wasn't reached, `resolve_error`) |
 | `POST /broll/<video_id>/<i>` · `/beat-plan/<video_id>/<i>` | B-roll suggestions and beat plan for one clip |
 | `POST /performance` · `/performance/import-csv` | Log stats for a posted clip, or import a Studio CSV |

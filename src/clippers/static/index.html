@@ -88,12 +88,11 @@
   button.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); }
   button.secondary:hover:not(:disabled),
   button.clip-field-copy:hover, button.clip-download-btn:hover, button.clip-broll-btn:hover,
-  button.clip-beatplan-btn:hover, button.clip-mark-posted-btn:hover, button.clip-performance-save:hover,
-  .csv-import-label:hover {
+  button.clip-beatplan-btn:hover, button.clip-mark-posted-btn:hover, button.clip-performance-save:hover {
     background: var(--panel);
     border-color: var(--border-strong);
   }
-  input:focus-visible, select:focus-visible, button:focus-visible, .csv-import-label:focus-within {
+  input:focus-visible, select:focus-visible, button:focus-visible {
     outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
     outline-offset: 1px;
   }
@@ -195,6 +194,22 @@
     font-variant-numeric: tabular-nums;
   }
   .clip-reason { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+  .clip-player {
+    flex: 0 0 240px;
+    width: 240px;
+    align-self: flex-start;
+    aspect-ratio: 9 / 16;
+    /* Center-crop the landscape source to a Shorts-shaped preview. */
+    object-fit: cover;
+    border-radius: 8px;
+    background: #000;
+  }
+  /* Too narrow for player and details side by side: stack them. */
+  @media (max-width: 640px) {
+    .clip { flex-wrap: wrap; }
+    .clip-player { flex-basis: calc(100% - 32px); width: auto; max-width: 240px; }
+    .clip-body { flex-basis: 100%; }
+  }
   .clip-field {
     display: flex;
     align-items: center;
@@ -344,61 +359,6 @@
   }
   .session-send-bar span { color: var(--muted); font-size: 13px; }
 
-  .shortlist-panel {
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 18px 20px;
-    margin-bottom: 24px;
-    background: color-mix(in srgb, var(--accent) 4%, transparent);
-  }
-  .shortlist-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
-  .shortlist-header h2 { font-size: 16px; margin: 0; flex: 1; }
-  .shortlist-header input[type=date] {
-    padding: 8px 10px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text);
-    font-size: 13px;
-  }
-  .shortlist-picks { display: flex; flex-direction: column; gap: 10px; }
-  .shortlist-pick {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 16px;
-  }
-  .shortlist-pick-meta { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
-  .shortlist-pick-lane {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    font-weight: 700;
-    color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
-    padding: 2px 8px;
-    border-radius: 999px;
-  }
-  .shortlist-pick-score { font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
-  .shortlist-pick-video { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-  .shortlist-pick-hook { font-weight: 600; margin-bottom: 4px; }
-  .shortlist-pick-firstline { color: var(--muted); font-size: 13px; font-style: italic; margin-bottom: 10px; }
-  .shortlist-send-btn {
-    padding: 6px 14px;
-    font-size: 13px;
-  }
-  .shortlist-send-result { margin-left: 10px; font-size: 12px; }
-  .shortlist-empty { color: var(--muted); font-size: 14px; }
-  .csv-import-label {
-    padding: 8px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--text);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-  }
   .clip-performance {
     margin-top: 8px;
     display: flex;
@@ -435,18 +395,6 @@
 </header>
 
 <main>
-  <div class="shortlist-panel">
-    <div class="shortlist-header">
-      <h2>Today's picks</h2>
-      <input type="date" id="shortlist-date" />
-      <button type="button" id="shortlist-refresh" class="secondary">Refresh</button>
-      <label class="csv-import-label" for="performance-csv-input">Import Studio CSV</label>
-      <input type="file" id="performance-csv-input" accept=".csv" style="display: none;" />
-      <span id="performance-csv-result" style="font-size: 12px; color: var(--muted);"></span>
-    </div>
-    <div id="shortlist-picks" class="shortlist-picks"></div>
-  </div>
-
   <div class="row">
     <input type="file" id="local-file-input" accept="video/*" multiple />
     <input type="text" id="local-title-input" placeholder="Title (optional, single file only)" />
@@ -650,6 +598,8 @@ function createSession(name, insertAt) {
         .join("");
       el.innerHTML = `
         <input type="checkbox" class="clip-checkbox" />
+        <video class="clip-player" controls preload="metadata" playsinline
+          src="/video/${encodeURIComponent(videoId)}#t=${clip.start},${clip.end}"></video>
         <div class="clip-body">
           <div class="clip-meta">
             <span class="clip-time">${fmtTime(clip.start)} – ${fmtTime(clip.end)}</span>
@@ -715,6 +665,21 @@ function createSession(name, insertAt) {
           <div class="clip-result"></div>
         </div>
       `;
+      // Keep playback inside the clip: the #t= fragment only sets where it
+      // starts, so stop at the clip's end and rewind on the next play.
+      const player = el.querySelector(".clip-player");
+      player.addEventListener("timeupdate", () => {
+        if (player.currentTime >= clip.end) {
+          player.pause();
+          player.currentTime = clip.start;
+        }
+      });
+      player.addEventListener("play", () => {
+        if (player.currentTime < clip.start - 0.25 || player.currentTime >= clip.end) {
+          player.currentTime = clip.start;
+        }
+      });
+
       const downloadBtn = el.querySelector(".clip-download-btn");
       if (downloadBtn) {
         downloadBtn.addEventListener("click", () => downloadClipText(clip, i));
@@ -1127,118 +1092,8 @@ function analyze() {
   localSourceInput.value = "";
 }
 
-// "Today's picks": the day's actual best
-// 1-2 clips ranked across every video analyzed that day, not a per-video
-// top N — reusing the same /send-to-resolve endpoint each session's own
-// send button uses.
-const shortlistDateInput = document.getElementById("shortlist-date");
-const shortlistRefreshBtn = document.getElementById("shortlist-refresh");
-const shortlistPicksEl = document.getElementById("shortlist-picks");
-
-function todayLocalDateStr() {
-  const d = new Date();
-  const tzOffsetMs = d.getTimezoneOffset() * 60000;
-  return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 10);
-}
-
-function renderShortlist(data) {
-  if (!data.picks || data.picks.length === 0) {
-    shortlistPicksEl.innerHTML = `<div class="shortlist-empty">No picks yet for this date — analyze some videos first.</div>`;
-    return;
-  }
-  shortlistPicksEl.innerHTML = data.picks
-    .map((c) => {
-      const sc = c.scorecard || {};
-      return `
-        <div class="shortlist-pick" data-video-id="${escapeHtml(c.video_id)}" data-start="${c.start}" data-end="${c.end}">
-          <div class="shortlist-pick-meta">
-            <span class="shortlist-pick-lane">${escapeHtml(sc.lane || "other")}</span>
-            <span class="shortlist-pick-score">${(c.score * 10).toFixed(1)}/10</span>
-            <span class="shortlist-pick-video">${escapeHtml(c.title)} · ${fmtTime(c.start)}–${fmtTime(c.end)} (${c.duration}s)</span>
-          </div>
-          <div class="shortlist-pick-hook">${escapeHtml(c.hook || "")}</div>
-          <div class="shortlist-pick-firstline">"${escapeHtml(sc.hook_first_line || "")}"</div>
-          <button type="button" class="shortlist-send-btn">Send to Resolve</button>
-          <span class="shortlist-send-result"></span>
-        </div>`;
-    })
-    .join("");
-
-  shortlistPicksEl.querySelectorAll(".shortlist-send-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const pickEl = btn.closest(".shortlist-pick");
-      const resultEl = pickEl.querySelector(".shortlist-send-result");
-      const video_id = pickEl.dataset.videoId;
-      const start = Number(pickEl.dataset.start);
-      const end = Number(pickEl.dataset.end);
-
-      btn.disabled = true;
-      btn.textContent = "Sending…";
-      resultEl.textContent = "";
-      try {
-        const res = await fetch("/send-to-resolve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ video_id, clips: [{ start, end }] }),
-        });
-        if (!res.ok) throw new Error(`send-to-resolve failed (${res.status})`);
-        const { results } = await res.json();
-        const r = results[0];
-        const { kind, text } = describeSendResult(r);
-        resultEl.style.color = `var(--${kind === "ok" ? "good" : kind === "fail" ? "bad" : "warn"})`;
-        resultEl.textContent = text;
-      } catch (e) {
-        resultEl.style.color = "var(--bad)";
-        resultEl.textContent = e.message;
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "Send to Resolve";
-      }
-    });
-  });
-}
-
-async function loadShortlist() {
-  const date = shortlistDateInput.value || todayLocalDateStr();
-  shortlistPicksEl.innerHTML = `<div class="shortlist-empty">Loading…</div>`;
-  try {
-    const res = await fetch(`/shortlist?date=${encodeURIComponent(date)}&n=2`);
-    if (!res.ok) throw new Error(`shortlist request failed (${res.status})`);
-    renderShortlist(await res.json());
-  } catch (e) {
-    shortlistPicksEl.innerHTML = `<div class="shortlist-empty" style="color: var(--bad);">${escapeHtml(e.message)}</div>`;
-  }
-}
-
-shortlistDateInput.value = todayLocalDateStr();
-shortlistRefreshBtn.addEventListener("click", loadShortlist);
-shortlistDateInput.addEventListener("change", loadShortlist);
-
-// Performance CSV import: a YouTube
-// Studio Shorts export, matched server-side to already-posted clips.
-const performanceCsvInput = document.getElementById("performance-csv-input");
-const performanceCsvResult = document.getElementById("performance-csv-result");
-performanceCsvInput.addEventListener("change", async () => {
-  const file = performanceCsvInput.files[0];
-  if (!file) return;
-  performanceCsvResult.textContent = "Importing…";
-  try {
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch("/performance/import-csv", { method: "POST", body: form });
-    if (!res.ok) throw new Error(`import failed (${res.status})`);
-    const { matched, unmatched } = await res.json();
-    performanceCsvResult.textContent = `Matched ${matched}, unmatched ${unmatched}`;
-  } catch (e) {
-    performanceCsvResult.textContent = e.message;
-  } finally {
-    performanceCsvInput.value = "";
-  }
-});
-
 loadSavedSessions();
 loadJobs();
-loadShortlist();
 
 analyzeBtn.addEventListener("click", analyze);
 </script>
