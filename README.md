@@ -238,7 +238,7 @@ It's slow on CPU: several minutes per hour of audio. Results are cached as `<vid
    **No Resolve? Still click Send to Resolve.** If Resolve isn't installed, isn't open, or doesn't allow scripting (which may be the case on the free version), the clip is rendered as an mp4 anyway. Its card shows a yellow note with the file path, and you can finish the edit in any editor. The mp4 has the reframe, style effects, music, captions (if ticked), cold open and outro baked in. B-roll is the one thing that only goes on the Resolve timeline.
 7. **Switch to Resolve.** Review, tighten and export. For native, editable captions, drag in your animated subtitle template (Effects Library → Titles → Subtitles) once per timeline.
 
-Every analyzed video stays on the page after a refresh or restart, with its clips, so you can come back and send more later. The **Copyright** badge on each video starts as *unknown*; click it once you've cleared the source.
+Every analyzed video stays on the page after a refresh or restart, with its clips, so you can come back and send more later.
 
 ---
 
@@ -396,7 +396,6 @@ The page talks to these endpoints, so you can script against them too.
 | `POST /send-to-resolve` | Render mp4s and put clips on the Resolve timeline (each result has `in_resolve` and, if Resolve wasn't reached, `resolve_error`) |
 | `POST /broll/<video_id>/<i>` · `/beat-plan/<video_id>/<i>` | B-roll suggestions and beat plan for one clip |
 | `POST /performance` · `/performance/import-csv` | Log stats for a posted clip, or import a Studio CSV |
-| `POST /copyright-status/<video_id>` | Mark a source cleared or unknown |
 
 ### 🧪 Development
 
@@ -472,7 +471,7 @@ Set `CLIPPERS_HOME` to keep all of it somewhere else.
 
 ## ⚖️ Responsible use
 
-Clippers cuts clips from other people's videos. You're responsible for having the rights to what you clip and post: your own footage, footage you have permission to use, or use that's allowed where you post it. The **Copyright** badge on each video stays *unknown* until you mark it cleared, as a reminder to check.
+Clippers cuts clips from other people's videos. You're responsible for having the rights to what you clip and post: your own footage, footage you have permission to use, or use that's allowed where you post it. Clippers doesn't check this for you, so clear each source before you post from it.
 
 ## 🤝 Contributing
 

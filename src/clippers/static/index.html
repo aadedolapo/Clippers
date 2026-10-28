@@ -128,29 +128,6 @@
   }
   .session.collapsed .session-toggle { transform: rotate(-90deg); }
   .session.collapsed .session-body { display: none; }
-  .compliance-badge {
-    display: none;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    font-weight: 600;
-    padding: 4px 10px;
-    border-radius: 999px;
-    cursor: pointer;
-    border: 1px solid transparent;
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
-  .compliance-badge.unknown {
-    background: color-mix(in srgb, var(--bad) 12%, transparent);
-    border-color: var(--bad);
-    color: var(--bad);
-  }
-  .compliance-badge.cleared {
-    background: color-mix(in srgb, var(--good) 12%, transparent);
-    border-color: var(--good);
-    color: var(--good);
-  }
   .session-retry-bar {
     margin-top: 8px;
     display: none;
@@ -472,7 +449,6 @@ function createSession(name, insertAt) {
     <div class="session-header">
       <span class="session-toggle">▾</span>
       <h2 class="session-name">${escapeHtml(name)}</h2>
-      <span class="compliance-badge unknown" title="Click to toggle copyright status">⚠️ Copyright: unknown</span>
       <span class="session-status">Starting…</span>
     </div>
     <div class="session-body">
@@ -505,7 +481,6 @@ function createSession(name, insertAt) {
   const sendBar = root.querySelector(".session-send-bar");
   const sendBtn = root.querySelector(".session-send-btn");
   const sendCount = root.querySelector(".session-send-count");
-  const complianceEl = root.querySelector(".compliance-badge");
   const retryBar = root.querySelector(".session-retry-bar");
   const retryBtn = root.querySelector(".session-retry-btn");
   const dismissBtn = root.querySelector(".session-dismiss-btn");
@@ -514,38 +489,6 @@ function createSession(name, insertAt) {
   let clips = [];
   // The analysis job this session is showing, so a failed one can be retried.
   let jobId = null;
-
-  // Compliance layer: always renders as a warning until a human
-  // explicitly clicks it to mark the source cleared — the system itself
-  // never sets this to "cleared".
-  function setComplianceStatus(status) {
-    const s = status === "cleared" ? "cleared" : "unknown";
-    complianceEl.dataset.status = s;
-    complianceEl.className = `compliance-badge ${s}`;
-    complianceEl.textContent = s === "cleared" ? "✅ Copyright: cleared" : "⚠️ Copyright: unknown";
-    complianceEl.style.display = "inline-flex";
-  }
-
-  complianceEl.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    if (!videoId) return;
-    const next = complianceEl.dataset.status === "cleared" ? "unknown" : "cleared";
-    complianceEl.style.opacity = "0.6";
-    try {
-      const res = await fetch(`/copyright-status/${videoId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: next }),
-      });
-      if (!res.ok) throw new Error(`copyright status update failed (${res.status})`);
-      const data = await res.json();
-      setComplianceStatus(data.copyright_status);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      complianceEl.style.opacity = "1";
-    }
-  });
 
   function setError(msg) {
     if (!msg) {
@@ -902,7 +845,6 @@ function createSession(name, insertAt) {
           nameEl.textContent = data.title;
           videoId = data.video_id;
           clips = data.clips;
-          setComplianceStatus(data.copyright_status);
           renderClips();
           return;
         }
@@ -993,10 +935,9 @@ function createSession(name, insertAt) {
     setStatus: (text) => { statusEl.textContent = text; },
     setError,
     showFailed: (id, data) => { jobId = id; showFailed(data); },
-    setDone: (id, clipList, copyrightStatus) => {
+    setDone: (id, clipList) => {
       videoId = id;
       clips = clipList;
-      setComplianceStatus(copyrightStatus);
       renderClips();
     },
     poll,
@@ -1044,7 +985,7 @@ function startSession(file, titleOverride, sourceOverride) {
 function restoreSession(saved) {
   const session = createSession(saved.title, "end");
   session.setStatus("Restored");
-  session.setDone(saved.video_id, saved.clips, saved.copyright_status);
+  session.setDone(saved.video_id, saved.clips);
 }
 
 // Jobs this page didn't start in its current life: ones still running (so a

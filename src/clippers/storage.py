@@ -18,46 +18,21 @@ STORE_PATH = os.path.join(DATA_DIR, "saved_clips.json")
 
 _LOCK = threading.Lock()
 
-# Every source gets a compliance status, and it must default to a
-# warning rather than a false "safe to publish" — adding commentary doesn't
-# by itself resolve copyright. Only a human toggling it via
-# set_copyright_status ever moves it off this default.
-DEFAULT_COPYRIGHT_STATUS = "unknown"
 
-
-def save_session(video_id: str, title: str, clips: list[dict], source: Optional[str] = None) -> str:
+def save_session(video_id: str, title: str, clips: list[dict], source: Optional[str] = None) -> None:
     """Persist (overwrite) the clip list for a video, keyed by video_id.
     `source` (where the video is from, or the speaker) is logged for future permission outreach and
-    claim tracing — informational only, not required. Returns the session's
-    copyright_status: carried forward from a prior save (so re-analyzing a
-    video doesn't quietly reset a status a human already cleared), else
-    DEFAULT_COPYRIGHT_STATUS for a brand-new video."""
+    claim tracing — informational only, not required."""
     with _LOCK:
         data = _read()
-        existing = data.get(video_id)
-        copyright_status = existing.get("copyright_status", DEFAULT_COPYRIGHT_STATUS) if existing else DEFAULT_COPYRIGHT_STATUS
         data[video_id] = {
             "video_id": video_id,
             "title": title,
             "source": source,
             "clips": clips,
-            "copyright_status": copyright_status,
             "saved_at": time.time(),
         }
         _write(data)
-        return copyright_status
-
-
-def set_copyright_status(video_id: str, status: str) -> dict:
-    """Update just the copyright_status of an existing session. Raises
-    KeyError if the video has no saved session yet."""
-    with _LOCK:
-        data = _read()
-        if video_id not in data:
-            raise KeyError(video_id)
-        data[video_id]["copyright_status"] = status
-        _write(data)
-        return data[video_id]
 
 
 def load_sessions() -> list[dict]:

@@ -155,10 +155,6 @@ class SendToResolveRequest(BaseModel):
     clips: list[ClipSelection]
 
 
-class CopyrightStatusRequest(BaseModel):
-    status: Literal["unknown", "cleared"]
-
-
 class PerformanceRequest(BaseModel):
     video_id: str
     start: float
@@ -177,7 +173,7 @@ def _set_job(job_id: str, **fields):
         JOBS[job_id].update(fields)
     # Persist on status changes and final results only: a done job carries
     # the full word-level transcript.
-    if "status" in fields or "copyright_status" in fields:
+    if "status" in fields:
         _persist_job(job_id)
 
 
@@ -258,10 +254,7 @@ def _run_analysis(
         _set_job(job_id, status="done", clips=clips, rejected=rejected)
         # Also save hook/title/description (and timing) to the session store,
         # which the shortlist and performance log read across videos.
-        copyright_status = storage.save_session(
-            video_id, title, [_serialize_clip(c) for c in clips], source=source
-        )
-        _set_job(job_id, copyright_status=copyright_status)
+        storage.save_session(video_id, title, [_serialize_clip(c) for c in clips], source=source)
     except Exception as e:
         logger.exception(f"analyze job {job_id} failed")
         _set_job(job_id, status="error", error=str(e))
@@ -374,7 +367,6 @@ def status(job_id: str):
         response["video_id"] = job["video_id"]
         response["title"] = job["title"]
         response["source"] = job.get("source")
-        response["copyright_status"] = job.get("copyright_status", storage.DEFAULT_COPYRIGHT_STATUS)
         response["clips"] = [_serialize_clip(c) for c in job["clips"]]
         response["rejected"] = [_serialize_rejected(c) for c in job.get("rejected", [])]
     return response
@@ -495,30 +487,6 @@ async def import_performance_csv(file: UploadFile = File(...)):
     and updates whichever already-posted records its rows match."""
     content = (await file.read()).decode("utf-8", errors="replace")
     return performance.import_csv(content)
-
-
-@app.post("/copyright-status/{video_id}")
-def update_copyright_status(video_id: str, req: CopyrightStatusRequest):
-    """Compliance layer: a human explicitly marking a source cleared
-    (or reverting it to unknown) — the system never sets this to "cleared"
-    on its own."""
-    try:
-        record = storage.set_copyright_status(video_id, req.status)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="video not found")
-
-    # Keep the in-memory job in sync too — JOBS holds a live reference to
-    # the same dict _run_analysis populated, so this mutation is visible to
-    # any later /status poll for this job without a second lookup path.
-    job = _find_job_by_video_id(video_id)
-    if job is not None:
-        with JOBS_LOCK:
-            job["copyright_status"] = req.status
-            job_id = next((jid for jid, j in JOBS.items() if j is job), None)
-        if job_id is not None:
-            _persist_job(job_id)
-
-    return {"video_id": video_id, "copyright_status": record["copyright_status"]}
 
 
 @app.post("/send-to-resolve")
