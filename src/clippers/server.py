@@ -352,6 +352,38 @@ def dismiss_job(job_id: str):
     return {"ok": True}
 
 
+@app.delete("/videos/{video_id}")
+def delete_video(video_id: str):
+    """Remove an analyzed video for good: its saved clips, every job for it,
+    and the source copy in downloads/ with its shot/speaker caches. Rendered
+    mp4s in output/ are left alone, but a Resolve timeline built from this
+    video will show its media as offline."""
+    with JOBS_LOCK:
+        job_ids = [jid for jid, j in JOBS.items() if j.get("video_id") == video_id]
+        if any(JOBS[jid]["status"] in jobs_store.RUNNING_STATUSES for jid in job_ids):
+            raise HTTPException(status_code=409, detail="this video is still being analyzed")
+        jobs = {jid: JOBS.pop(jid) for jid in job_ids}
+    for jid, j in jobs_store.load_all().items():
+        if j.get("video_id") == video_id:
+            jobs.setdefault(jid, j)
+
+    download_dir = os.path.realpath(paths.DOWNLOAD_DIR)
+    filepaths = {j["filepath"] for j in jobs.values() if j.get("filepath")}
+    for filepath in filepaths:
+        # Only ever delete our own copy, never a file outside downloads/.
+        if os.path.dirname(os.path.realpath(filepath)) != download_dir:
+            continue
+        for path in (filepath, shots._cache_path(filepath), diarize._cache_path(filepath)):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+    for jid in jobs:
+        jobs_store.delete_job(jid)
+    storage.delete_session(video_id)
+    return {"ok": True}
+
+
 @app.get("/status/{job_id}")
 def status(job_id: str):
     with JOBS_LOCK:

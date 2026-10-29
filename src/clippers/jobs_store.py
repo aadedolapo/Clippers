@@ -52,6 +52,14 @@ def load_job(job_id: str) -> Optional[dict]:
         return None
 
 
+def delete_job(job_id: str) -> None:
+    with _LOCK:
+        try:
+            os.remove(_path(job_id))
+        except FileNotFoundError:
+            pass
+
+
 def load_all() -> dict[str, dict]:
     """Every job on disk, keyed by job_id. Jobs that were still running when
     the server stopped come back as status=error with interrupted=True (and

@@ -391,6 +391,7 @@ The page talks to these endpoints, so you can script against them too.
 | `GET /jobs` | Every job, including restored ones |
 | `POST /jobs/<job_id>/retry` · `/dismiss` | Re-run or hide a failed job |
 | `GET /saved-clips` | Every analyzed video and its clips |
+| `DELETE /videos/<video_id>` | Delete a video's clips, jobs and its copy in `downloads/` (rendered mp4s in `output/` are kept) |
 | `GET /video/<video_id>` | Stream a video's source file (the clip preview players use it) |
 | `GET /shortlist?date=YYYY-MM-DD` | The day's best clips across videos, at most one per lane |
 | `POST /send-to-resolve` | Render mp4s and put clips on the Resolve timeline (each result has `in_resolve` and, if Resolve wasn't reached, `resolve_error`) |

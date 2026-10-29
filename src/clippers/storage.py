@@ -35,6 +35,13 @@ def save_session(video_id: str, title: str, clips: list[dict], source: Optional[
         _write(data)
 
 
+def delete_session(video_id: str) -> None:
+    with _LOCK:
+        data = _read()
+        if data.pop(video_id, None) is not None:
+            _write(data)
+
+
 def load_sessions() -> list[dict]:
     """All saved sessions, newest first."""
     with _LOCK:
