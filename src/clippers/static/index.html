@@ -42,17 +42,7 @@
 
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .row input[type=file] { flex: 1 1 240px; min-width: 0; }
-  .row input[type=text] { flex: 1 1 160px; min-width: 0; }
   .row .clip-style-checkbox { white-space: nowrap; font-size: 13px; }
-  input[type=text] {
-    flex: 1;
-    padding: 12px 14px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text);
-    font-size: 14px;
-  }
   input[type=file] {
     flex: 1;
     padding: 10px 14px;
@@ -387,12 +377,10 @@
 <main>
   <div class="row">
     <input type="file" id="local-file-input" accept="video/*" multiple />
-    <input type="text" id="local-title-input" placeholder="Title (optional, single file only)" />
-    <input type="text" id="local-source-input" placeholder="Source / speaker (optional, single file only)" />
     <label class="clip-style-checkbox" title="Look for 45-90s story clips instead of Shorts-length ones"><input type="checkbox" id="long-form-input" /> Long-form clips</label>
     <button id="analyze-btn">Analyze</button>
   </div>
-  <p style="margin-top: 10px; font-size: 13px; color: var(--muted);">Select one or more video files to queue them all at once. Source is logged per video for future permission outreach and claim tracing.</p>
+  <p style="margin-top: 10px; font-size: 13px; color: var(--muted);">Select one or more video files to queue them all at once.</p>
 
   <div id="sessions"></div>
 </main>
@@ -400,8 +388,6 @@
 <script>
 const analyzeBtn = document.getElementById("analyze-btn");
 const localFileInput = document.getElementById("local-file-input");
-const localTitleInput = document.getElementById("local-title-input");
-const localSourceInput = document.getElementById("local-source-input");
 const sessionsEl = document.getElementById("sessions");
 
 function fmtTime(sec) {
@@ -979,7 +965,7 @@ function createSession(name, insertAt) {
 }
 
 // Kicks off a brand-new upload → analyze → poll flow for a freshly selected file.
-function startSession(file, titleOverride, sourceOverride) {
+function startSession(file) {
   const session = createSession(file.name, "start");
   session.setStatus("Starting…");
 
@@ -992,7 +978,7 @@ function startSession(file, titleOverride, sourceOverride) {
       if (!uploadRes.ok) throw new Error(`upload failed (${uploadRes.status})`);
       const { local_file, title } = await uploadRes.json();
       const body = {
-        local_file, title: titleOverride || title, source: sourceOverride || undefined,
+        local_file, title,
         long_form: document.getElementById("long-form-input").checked,
       };
       session.setName(body.title);
@@ -1059,12 +1045,8 @@ async function loadSavedSessions() {
 function analyze() {
   const files = Array.from(localFileInput.files);
   if (files.length === 0) return;
-  const singleTitle = files.length === 1 ? localTitleInput.value.trim() : "";
-  const singleSource = files.length === 1 ? localSourceInput.value.trim() : "";
-  files.forEach((file) => startSession(file, singleTitle, singleSource));
+  files.forEach((file) => startSession(file));
   localFileInput.value = "";
-  localTitleInput.value = "";
-  localSourceInput.value = "";
 }
 
 loadSavedSessions();
